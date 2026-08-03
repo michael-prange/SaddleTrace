@@ -9,9 +9,21 @@ import SwiftUI
 
 @main
 struct SaddleBackApp: App {
+    @State private var appModel: AppModel?
+
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            if let appModel {
+                AnimalListView()
+                    .environment(appModel)
+            } else {
+                ProgressView("Preparing…")
+                    .task {
+                        let model = await AppModel.make()
+                        await model.loadAnimals()
+                        appModel = model
+                    }
+            }
         }
     }
 }

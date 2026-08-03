@@ -1,0 +1,26 @@
+# --- macOS ---
+.DS_Store
+*~
+*.swp
+
+# --- Xcode ---
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdata
+*.xccheckout
+*.moved-aside
+DerivedData/
+*.hmap
+*.ipa
+*.xcuserstate
+
+# --- Swift Package Manager ---
+.build/
+.swiftpm/
+
+# --- User-specific files ---
+xcuserdata/
+
+# --- Local package overrides ---
+LocalPackages/

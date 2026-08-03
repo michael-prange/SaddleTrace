@@ -6,6 +6,11 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		C347A071301C281A0013F22D /* ExportKit in Frameworks */ = {isa = PBXBuildFile; productRef = C347A070301C281A0013F22D /* ExportKit */; };
+		C347A073301C281F0013F22D /* MeshKit in Frameworks */ = {isa = PBXBuildFile; productRef = C347A072301C281F0013F22D /* MeshKit */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		C347A039301BF7000013F22D /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -52,6 +57,8 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				C347A073301C281F0013F22D /* MeshKit in Frameworks */,
+				C347A071301C281A0013F22D /* ExportKit in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -78,6 +85,7 @@
 				C347A02D301BF6FF0013F22D /* SaddleBack */,
 				C347A03B301BF7000013F22D /* SaddleBackTests */,
 				C347A045301BF7000013F22D /* SaddleBackUITests */,
+				C347A06F301C281A0013F22D /* Frameworks */,
 				C347A02C301BF6FF0013F22D /* Products */,
 			);
 			sourceTree = "<group>";
@@ -90,6 +98,13 @@
 				C347A042301BF7000013F22D /* SaddleBackUITests.xctest */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		C347A06F301C281A0013F22D /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -112,6 +127,8 @@
 			);
 			name = SaddleBack;
 			packageProductDependencies = (
+				C347A070301C281A0013F22D /* ExportKit */,
+				C347A072301C281F0013F22D /* MeshKit */,
 			);
 			productName = SaddleBack;
 			productReference = C347A02B301BF6FF0013F22D /* SaddleBack.app */;
@@ -195,6 +212,10 @@
 			);
 			mainGroup = C347A022301BF6FF0013F22D;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				C347A055301C1CDB0013F22D /* XCLocalSwiftPackageReference "Packages/ExportKit" */,
+				C347A056301C1CFB0013F22D /* XCLocalSwiftPackageReference "Packages/MeshKit" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = C347A02C301BF6FF0013F22D /* Products */;
 			projectDirPath = "";
@@ -395,11 +416,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SaddleBack/SaddleBack.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2TK4QQS6KC;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "SaddleBack uses the camera and LiDAR to scan you animal's back";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -417,7 +440,7 @@
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Debug;
@@ -427,11 +450,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_ENTITLEMENTS = SaddleBack/SaddleBack.entitlements;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 2TK4QQS6KC;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_NSCameraUsageDescription = "SaddleBack uses the camera and LiDAR to scan you animal's back";
 				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
 				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
 				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
@@ -449,7 +474,7 @@
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
-				SWIFT_VERSION = 5.0;
+				SWIFT_VERSION = 6.0;
 				TARGETED_DEVICE_FAMILY = "1,2";
 			};
 			name = Release;
@@ -578,6 +603,30 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		C347A055301C1CDB0013F22D /* XCLocalSwiftPackageReference "Packages/ExportKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/ExportKit;
+		};
+		C347A056301C1CFB0013F22D /* XCLocalSwiftPackageReference "Packages/MeshKit" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/MeshKit;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		C347A070301C281A0013F22D /* ExportKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C347A055301C1CDB0013F22D /* XCLocalSwiftPackageReference "Packages/ExportKit" */;
+			productName = ExportKit;
+		};
+		C347A072301C281F0013F22D /* MeshKit */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = C347A056301C1CFB0013F22D /* XCLocalSwiftPackageReference "Packages/MeshKit" */;
+			productName = MeshKit;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = C347A023301BF6FF0013F22D /* Project object */;
 }
