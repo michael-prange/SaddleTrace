@@ -30,6 +30,12 @@ final class CaptureModel {
     /// Whether this device can do LiDAR scene reconstruction at all.
     let isSupported = ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification)
 
+    /// Set by the capture view (via the AR coordinator): requests the fused LiDAR
+    /// mesh be written to the given URL on the next AR frame.
+    var requestMeshExport: ((URL) -> Void)?
+    /// Result of that export (nil = not yet requested / still pending).
+    var meshExportFinished: Bool?
+
     /// Ideal band edges (metres).
     let nearLimit = 0.40
     let farLimit = 0.80

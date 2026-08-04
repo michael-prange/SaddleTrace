@@ -4,10 +4,13 @@ import SwiftUI
 /// lets the user skip it on future scans (persisted via `@AppStorage`).
 struct ScanInstructionsView: View {
     @AppStorage("skipScanInstructions") private var skipInstructions = false
+    @AppStorage("measurementSystem") private var systemRaw = MeasurementSystem.metric.rawValue
     @Environment(\.dismiss) private var dismiss
 
     /// Called when the user chooses to begin the scan.
     let onStart: () -> Void
+
+    private var imperial: Bool { MeasurementSystem(rawValue: systemRaw) == .imperial }
 
     private struct Step: Identifiable {
         let id = UUID()
@@ -16,20 +19,24 @@ struct ScanInstructionsView: View {
         let detail: String
     }
 
-    private let steps: [Step] = [
-        .init(icon: "figure.stand", title: "Stand the animal square",
-              detail: "All four feet loaded evenly on level ground, standing quietly."),
-        .init(icon: "sun.max", title: "Use soft, even light",
-              detail: "Indirect light or shade works best; avoid harsh shadows and direct sun."),
-        .init(icon: "ruler", title: "Hold 40–80 cm above the back",
-              detail: "Keep the phone roughly two hand-widths above the surface."),
-        .init(icon: "arrow.left.and.right", title: "Sweep the whole back",
-              detail: "Move slowly forward-to-back and side-to-side to cover from withers to tail."),
-        .init(icon: "circle.grid.cross", title: "Watch the coverage overlay",
-              detail: "Fill in any red or yellow areas until the back reads green."),
-        .init(icon: "timer", title: "Keep it short",
-              detail: "Aim for under a minute; if the animal shifts a foot, redo the scan."),
-    ]
+    private var steps: [Step] {
+        let region = imperial ? "about 20 in" : "about 50 cm"
+        let height = imperial ? "about 20–24 in" : "about 50–60 cm"
+        return [
+            .init(icon: "figure.stand", title: "Stand the animal square",
+                  detail: "All four feet loaded evenly on level ground, standing quietly."),
+            .init(icon: "sun.max", title: "Use soft, even light",
+                  detail: "Indirect light or shade works best; avoid harsh shadows and direct sun."),
+            .init(icon: "viewfinder.rectangular", title: "Frame the saddle area",
+                  detail: "Fill the on-screen box with \(region) of back — the part the saddle rests on. Center the spine in the box."),
+            .init(icon: "arrow.up.and.down", title: "Hold \(height) above",
+                  detail: "Roughly arm's length above the back. You can hold lower and angle the phone forward so you can see the screen."),
+            .init(icon: "camera.aperture", title: "Hold still and tap once",
+                  detail: "It's a single shot — no sweeping. When the distance reads good, hold steady and tap Capture."),
+            .init(icon: "checkmark.circle", title: "Check, then keep or retake",
+                  detail: "Review the shot; retake if the back isn't fully in the box. If the animal shifts a foot, retake."),
+        ]
+    }
 
     var body: some View {
         NavigationStack {
@@ -64,7 +71,7 @@ struct ScanInstructionsView: View {
                         dismiss()
                         onStart()
                     } label: {
-                        Text("Start Scan").frame(maxWidth: .infinity)
+                        Text("OK").frame(maxWidth: .infinity)
                     }
                     .buttonStyle(.borderedProminent)
                 }

@@ -90,6 +90,64 @@ nonisolated enum MeshAnchorGeometry {
         return CoveragePointData(id: anchor.identifier, points: points, colors: colors)
     }
 
+    /// Combines all mesh anchors into a single **world-space** (ARKit Y-up) mesh,
+    /// keeping only faces the operator actually scanned up close (coverage state ≥
+    /// partial). This crops out floor/ground/surroundings — which the operator
+    /// never dwelled on at working distance — isolating the animal's back so the
+    /// MeshKit PCA/spine fit locks onto the right structure. Vertices are compacted
+    /// so unreferenced background points don't bias the fit.
+    static func fusedScannedMesh(anchors: [ARMeshAnchor], tracker: CoverageTracker)
+        -> (positions: [SIMD3<Float>], indices: [UInt32]) {
+        var outPos: [SIMD3<Float>] = []
+        var outIdx: [UInt32] = []
+        for anchor in anchors {
+            let verts = positions(anchor.geometry)
+            let idx = indices(anchor.geometry)
+            guard idx.count >= 3, !verts.isEmpty else { continue }
+            let world = anchor.transform
+            func toWorld(_ p: SIMD3<Float>) -> SIMD3<Float> {
+                let v = world * SIMD4<Float>(p, 1); return SIMD3<Float>(v.x, v.y, v.z)
+            }
+            var remap = [Int32](repeating: -1, count: verts.count)
+            var i = 0
+            while i + 2 < idx.count {
+                let ia = Int(idx[i]), ib = Int(idx[i + 1]), ic = Int(idx[i + 2])
+                let wa = toWorld(verts[ia]), wb = toWorld(verts[ib]), wc = toWorld(verts[ic])
+                if tracker.state(at: (wa + wb + wc) / 3) != .uncovered {
+                    for (li, wp) in [(ia, wa), (ib, wb), (ic, wc)] {
+                        if remap[li] < 0 {
+                            remap[li] = Int32(outPos.count)
+                            outPos.append(wp)
+                        }
+                        outIdx.append(UInt32(remap[li]))
+                    }
+                }
+                i += 3
+            }
+        }
+        return (outPos, outIdx)
+    }
+
+    /// All mesh-anchor vertices in **world space** (ARKit Y-up), colored red/
+    /// yellow/green by coverage state — the full, uncropped captured cloud for the
+    /// diagnostic point-cloud viewer (shows what was captured vs. what the crop keeps).
+    static func fusedPointCloud(anchors: [ARMeshAnchor], tracker: CoverageTracker)
+        -> (points: [SIMD3<Float>], colors: [SIMD3<Float>]) {
+        var points: [SIMD3<Float>] = []
+        var colors: [SIMD3<Float>] = []
+        for anchor in anchors {
+            let verts = positions(anchor.geometry)
+            let world = anchor.transform
+            for v in verts {
+                let w = world * SIMD4<Float>(v, 1)
+                let p = SIMD3<Float>(w.x, w.y, w.z)
+                points.append(p)
+                colors.append(tracker.state(at: p).rgb)
+            }
+        }
+        return (points, colors)
+    }
+
     /// Builds renderable coverage data (local positions + per-face material index
     /// from the tracker's world-space state).
     static func coverageData(for anchor: ARMeshAnchor, tracker: CoverageTracker) -> CoverageMeshData? {

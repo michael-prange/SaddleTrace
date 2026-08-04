@@ -124,6 +124,15 @@ public enum SpineCurveFitter {
         public var crestLateralWindow: Float = 0.05
         /// Lower bound on estimated per-slice noise (metres).
         public var noiseFloor: Float = 1e-4
+        /// Lateral bin width for the per-slice symmetry search.
+        public var symBinY: Float = 0.005
+        /// Half-width (m) over which left/right symmetry is compared each slice.
+        public var symHalfWindow: Float = 0.08
+        /// Only centres whose crest height is within this of the slice's top are
+        /// considered — keeps the search on the dorsal crest, not down a side.
+        public var crestHeightTol: Float = 0.03
+        /// Minimum symmetric point pairs required to trust a symmetry centre.
+        public var minSymPairs: Int = 4
         public init() {}
     }
 
@@ -153,23 +162,32 @@ public enum SpineCurveFitter {
         for s in 0..<sliceCount {
             let xc = xLo + Float(s) * cfg.sliceSpacing
             let slab = top.filter { abs($0.x - xc) <= cfg.slabHalfWidth }
-            guard let peak = slab.max(by: { $0.z < $1.z }) else { continue }
+            guard slab.count >= 4 else { continue }
+
+            // The spine crest is the lateral position where the transverse profile
+            // is most left/right symmetric (Design §7.2, refined). This is robust to
+            // a lone noisy high vertex, which the old "highest vertex" rule mistook
+            // for the crest and which mis-centred the cross-sections.
+            let crest: (y: Float, z: Float)
+            if let sym = Self.crestBySymmetry(slab, cfg: cfg) {
+                crest = sym
+            } else if let peak = slab.max(by: { $0.z < $1.z }) {
+                crest = (peak.y, peak.z)   // fallback for sparse slabs
+            } else { continue }
 
             // Vertical-noise estimate: scatter of Z among near-crest vertices.
-            let nearCrest = slab.filter { abs($0.y - peak.y) <= cfg.crestLateralWindow }
+            let nearCrest = slab.filter { abs($0.y - crest.y) <= cfg.crestLateralWindow }
             let zNoise = Self.standardDeviation(nearCrest.map { $0.z }, floor: cfg.noiseFloor)
-            // Lateral-position noise: scatter of Y among the topmost vertices.
-            let topBand = slab.filter { $0.z >= peak.z - 0.02 }
-            let yNoise = Self.standardDeviation(topBand.map { $0.y }, floor: cfg.noiseFloor)
 
-            peaks.append(peak)
+            peaks.append(SIMD3<Float>(xc, crest.y, crest.z))
             // Use the slice-centre X as the knot abscissa — it increases strictly
-            // by `sliceSpacing`, whereas the picked vertex's grid-quantized X can
+            // by `sliceSpacing`, whereas a picked vertex's grid-quantized X can
             // repeat between adjacent slabs (duplicate knots → singular spline).
             xs.append(Double(xc))
-            ys.append(Double(peak.y))
-            zs.append(Double(peak.z))
-            sigY.append(Double(yNoise))
+            ys.append(Double(crest.y))
+            zs.append(Double(crest.z))
+            // The symmetry centre is stable, so weight the lateral spline tightly.
+            sigY.append(Double(max(cfg.noiseFloor, cfg.symBinY)))
             sigZ.append(Double(zNoise))
         }
 
@@ -179,6 +197,47 @@ public enum SpineCurveFitter {
         let zSpline = SmoothingSpline.autoFit(x: xs, y: zs, sigma: sigZ)
         let curve = SpineCurve(ySpline: ySpline, zSpline: zSpline, xMin: xs.first!, xMax: xs.last!)
         return Result(peaks: peaks, curve: curve)
+    }
+
+    /// Finds the crest of one transverse slab as the lateral centre of maximum
+    /// left/right symmetry. Builds a top-envelope height profile (max Z per lateral
+    /// bin), then, among bins near the top, picks the centre minimizing the squared
+    /// difference between mirrored samples out to `symHalfWindow`. Returns the
+    /// centre's `(y, z)`, or nil if the slab is too sparse to judge.
+    private static func crestBySymmetry(_ slab: [SIMD3<Float>], cfg: Configuration) -> (y: Float, z: Float)? {
+        let binY = cfg.symBinY
+        // Top-envelope profile: lateral bin index → max Z in that bin.
+        var profile: [Int: Float] = [:]
+        for v in slab {
+            let b = Int((v.y / binY).rounded())
+            if let z = profile[b] { if v.z > z { profile[b] = v.z } } else { profile[b] = v.z }
+        }
+        guard profile.count >= 4, let maxZ = profile.values.max() else { return nil }
+
+        let kWindow = max(Int((cfg.symHalfWindow / binY).rounded()), 1)
+        // Candidate centres: bins whose crest sits near the slab's top.
+        let candidates = profile.filter { $0.value >= maxZ - cfg.crestHeightTol }.keys.sorted()
+
+        var bestCentre: Int?
+        var bestScore = Float.infinity
+        for c in candidates {
+            var err: Float = 0
+            var pairs = 0
+            for k in 1...kWindow {
+                guard let zL = profile[c - k], let zR = profile[c + k] else { continue }
+                let d = zL - zR
+                err += d * d
+                pairs += 1
+            }
+            guard pairs >= cfg.minSymPairs else { continue }
+            let score = err / Float(pairs)
+            if score < bestScore || (score == bestScore && (profile[c] ?? 0) > (profile[bestCentre ?? c] ?? 0)) {
+                bestScore = score
+                bestCentre = c
+            }
+        }
+        guard let c = bestCentre, let z = profile[c] else { return nil }
+        return (Float(c) * binY, z)
     }
 
     private static func standardDeviation(_ values: [Float], floor: Float) -> Float {

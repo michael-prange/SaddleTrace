@@ -178,10 +178,7 @@ nonisolated final class TrueDepthCaptureController: NSObject, AVCaptureDataOutpu
         let savedCount = writer?.savedCount ?? 0
         let isScanning = scanning
         Task { @MainActor [model] in
-            model.distanceMeters = distance
-            model.state = model.classify(distance)
-            model.isScanning = isScanning
-            model.savedFrameCount = savedCount
+            model.apply(distance: distance, scanning: isScanning, savedFrames: savedCount)
         }
     }
 

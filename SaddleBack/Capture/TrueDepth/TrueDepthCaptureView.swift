@@ -106,7 +106,6 @@ struct TrueDepthCaptureView: View {
         } description: {
             Text("This device has no TrueDepth front camera.")
         } actions: {
-            Button("Use Demo Scan") { onFinish(nil); dismiss() }
             Button("Close") { onCancel(nil); dismiss() }
         }
     }

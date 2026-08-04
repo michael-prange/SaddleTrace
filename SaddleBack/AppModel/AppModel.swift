@@ -155,8 +155,11 @@ final class AppModel {
     /// photogrammetry and frames were actually saved. Chains behind any in-flight
     /// reconstruction and returns once THIS scan has finished (or was skipped).
     func autoReconstruct(_ scan: ScanRecord, for animalID: UUID) async {
-        guard ReconstructionDriver.isSupported,
-              hasCapturedFrames(animalID: animalID, scanID: scan.id) else { return }
+        let lidarOBJ = library.framesDirectory(animalID, scan.id).appendingPathComponent("lidar.obj")
+        let hasLidarMesh = FileManager.default.fileExists(atPath: lidarOBJ.path)
+        guard hasLidarMesh
+                || (ReconstructionDriver.isSupported && hasCapturedFrames(animalID: animalID, scanID: scan.id))
+        else { return }
         let previous = reconstructionTask
         let task = Task { @MainActor in
             await previous?.value
@@ -170,100 +173,124 @@ final class AppModel {
     /// then runs the MeshKit pipeline on it. Reports progress via
     /// `reconstructionProgress`.
     func reconstructScan(_ scan: ScanRecord, for animalID: UUID) async -> ProcessedScan? {
-        guard ReconstructionDriver.isSupported else {
+        let framesDir = library.framesDirectory(animalID, scan.id)
+        let lidarOBJ = framesDir.appendingPathComponent("lidar.obj")
+        await library.materialize(lidarOBJ)
+        let hasLidarMesh = FileManager.default.fileExists(atPath: lidarOBJ.path)
+
+        // The LiDAR path uses ARKit's fused scene mesh directly (no photogrammetry);
+        // only the TrueDepth path needs a PhotogrammetrySession.
+        guard hasLidarMesh || ReconstructionDriver.isSupported else {
             errorMessage = "This device can't reconstruct scans."
             return nil
         }
-        let framesDir = library.framesDirectory(animalID, scan.id)
-        let usdz = library.artifactURL(animalID, scan.id, .modelUSDZ)
+
         let start = Date()
         reconstructionProgress = 0
         defer { reconstructionProgress = nil }
 
-        do {
-            var updated = scan; updated.status = .reconstructing
-            try? await library.save(updated, for: animalID)
+        var updated = scan; updated.status = .reconstructing
+        try? await library.save(updated, for: animalID)
 
-            _ = try await ReconstructionDriver.reconstruct(
-                framesDirectory: framesDir, outputURL: usdz, detail: scan.detail
-            ) { fraction in
-                Task { @MainActor in self.reconstructionProgress = fraction * 0.9 }
+        do {
+            let mesh: TriangleMesh
+            let textured: URL?
+            let fused: URL?
+            if hasLidarMesh {
+                // Fused LiDAR scene mesh (ARKit Y-up) → Z-up; already cropped to the
+                // scanned region, so no floor to strip.
+                mesh = try MeshIO.readOBJ(at: lidarOBJ).transformed(by: Self.yUpToZUp)
+                textured = nil
+                fused = lidarOBJ
+                reconstructionProgress = 0.6
+            } else {
+                let usdz = library.artifactURL(animalID, scan.id, .modelUSDZ)
+                _ = try await ReconstructionDriver.reconstruct(
+                    framesDirectory: framesDir, outputURL: usdz, detail: scan.detail
+                ) { fraction in
+                    Task { @MainActor in self.reconstructionProgress = fraction * 0.9 }
+                }
+                mesh = try USDZMeshLoader.loadTriangleMesh(from: usdz).transformed(by: Self.yUpToZUp)
+                textured = usdz
+                fused = nil
             }
 
-            // Load, orient (Y-up → Z-up), and run the geometry pipeline. A
-            // reconstructed back has no floor, so disable the top-region filter.
-            let mesh = try USDZMeshLoader.loadTriangleMesh(from: usdz).transformed(by: Self.yUpToZUp)
             reconstructionProgress = 0.95
-            var result = try await processor.process(
-                mesh: mesh, animalID: animalID, scanID: scan.id,
-                stationSpacing: scan.stationSpacingMeters, topRegionMinHeight: -1_000_000)
-            // The interactive 3D view uses the photo-textured reconstruction.
-            result.exports.texturedModelURL = usdz
-            result.exports.reportPDF = generateReportPDF(result, animalID: animalID, scanID: scan.id)
-
+            let result = try await makeResult(mesh: mesh, textured: textured, fused: fused, scan: scan, animalID: animalID)
             updated = scan; updated.status = .complete
             updated.processingSeconds = Date().timeIntervalSince(start)
             try await library.save(updated, for: animalID)
             return result
         } catch {
             errorMessage = "Reconstruction failed: \(error.localizedDescription)"
-            var updated = scan; updated.status = .failed
+            updated = scan; updated.status = .failed
             try? await library.save(updated, for: animalID)
             return nil
         }
     }
 
-    /// Loads the viewable result for an already-completed scan WITHOUT re-running
-    /// photogrammetry. For a reconstructed scan it reloads the saved USDZ and runs
-    /// only the fast MeshKit pipeline (seconds); for a demo scan it re-runs the
-    /// synthetic pipeline (also fast). Returns nil if nothing is available.
+    /// Loads the viewable result for an already-completed scan by reloading the
+    /// saved mesh and running only the fast MeshKit pipeline (seconds). Returns nil
+    /// if no reconstructed mesh is available.
     func loadResult(for scan: ScanRecord, animalID: UUID) async -> ProcessedScan? {
-        // Reconstructed scans have captured frames + a saved model.usdz.
-        if hasCapturedFrames(animalID: animalID, scanID: scan.id) {
-            let usdz = library.artifactURL(animalID, scan.id, .modelUSDZ)
-            await library.materialize(usdz)
-            guard FileManager.default.fileExists(atPath: usdz.path) else { return nil }
-            do {
-                let mesh = try USDZMeshLoader.loadTriangleMesh(from: usdz).transformed(by: Self.yUpToZUp)
-                var result = try await processor.process(
-                    mesh: mesh, animalID: animalID, scanID: scan.id,
-                    stationSpacing: scan.stationSpacingMeters, topRegionMinHeight: -1_000_000)
-                result.exports.texturedModelURL = usdz
-                result.exports.reportPDF = generateReportPDF(result, animalID: animalID, scanID: scan.id)
-                return result
-            } catch {
+        if let (mesh, textured, fused) = await loadReconstructedMesh(scan, animalID: animalID) {
+            do { return try await makeResult(mesh: mesh, textured: textured, fused: fused, scan: scan, animalID: animalID) }
+            catch {
                 errorMessage = "Couldn't load scan result: \(error.localizedDescription)"
                 return nil
             }
         }
-        // Demo/synthetic completed scan — cheap to reproduce.
-        return await processScan(scan, for: animalID)
+        // No reconstructed mesh available.
+        return nil
     }
 
-    /// Runs the geometry + export pipeline for a scan and marks it complete.
-    /// Until CaptureKit/ReconstructionKit exist, the input is a synthetic back
-    /// mesh so the whole flow is exercisable end-to-end.
-    func processScan(_ scan: ScanRecord, for animalID: UUID) async -> ProcessedScan? {
-        let mesh = SyntheticBackMesh.make().mesh
-        let start = Date()
-        do {
-            var result = try await processor.process(
-                mesh: mesh, animalID: animalID, scanID: scan.id,
-                stationSpacing: scan.stationSpacingMeters
-            )
-            result.exports.reportPDF = generateReportPDF(result, animalID: animalID, scanID: scan.id)
-            var updated = scan
-            updated.status = .complete
-            updated.processingSeconds = Date().timeIntervalSince(start)
-            try await library.save(updated, for: animalID)
-            return result
-        } catch {
-            errorMessage = "Processing failed: \(error.localizedDescription)"
-            var updated = scan
-            updated.status = .failed
-            try? await library.save(updated, for: animalID)
-            return nil
+    /// Loads the best reconstructed mesh for a scan, oriented into MeshKit's Z-up
+    /// frame: the fused **LiDAR** mesh (`lidar.obj`) if present, else the
+    /// photogrammetry `model.usdz`. Returns the mesh, the textured-model URL, and
+    /// the fused-mesh URL (for the 3D viewer).
+    private func loadReconstructedMesh(_ scan: ScanRecord, animalID: UUID) async -> (mesh: TriangleMesh, textured: URL?, fused: URL?)? {
+        let lidarOBJ = library.framesDirectory(animalID, scan.id).appendingPathComponent("lidar.obj")
+        await library.materialize(lidarOBJ)
+        if FileManager.default.fileExists(atPath: lidarOBJ.path),
+           let m = try? MeshIO.readOBJ(at: lidarOBJ) {
+            return (m.transformed(by: Self.yUpToZUp), nil, lidarOBJ)
         }
+        let usdz = library.artifactURL(animalID, scan.id, .modelUSDZ)
+        await library.materialize(usdz)
+        if FileManager.default.fileExists(atPath: usdz.path),
+           let m = try? USDZMeshLoader.loadTriangleMesh(from: usdz) {
+            return (m.transformed(by: Self.yUpToZUp), usdz, nil)
+        }
+        return nil
+    }
+
+    /// Runs the MeshKit geometry + export pipeline on an already-reconstructed mesh
+    /// (Z-up, no floor to strip), attaching the textured/fused models + generated PDF.
+    private func makeResult(mesh: TriangleMesh, textured: URL?, fused: URL?, scan: ScanRecord, animalID: UUID) async throws -> ProcessedScan {
+        var result = try await processor.process(
+            mesh: mesh, animalID: animalID, scanID: scan.id,
+            stationSpacing: scan.stationSpacingMeters, topRegionMinHeight: -1_000_000)
+        result.exports.texturedModelURL = textured
+        result.exports.fusedModelURL = fused
+        let framesDir = library.framesDirectory(animalID, scan.id)
+        let cloud = framesDir.appendingPathComponent("pointcloud.bin")
+        await library.materialize(cloud)
+        result.exports.pointCloudURL = FileManager.default.fileExists(atPath: cloud.path) ? cloud : nil
+        let surface = framesDir.appendingPathComponent("surface.bin")
+        await library.materialize(surface)
+        if FileManager.default.fileExists(atPath: surface.path) {
+            result.exports.paintedSurfaceURL = surface
+            // Also emit a colored PLY of the painted surface for export/sharing.
+            if let painted = try? PaintedMeshIO.read(surface) {
+                let ply = library.exportsDirectory(animalID, scan.id).appendingPathComponent("surface.ply")
+                if (try? PLYWriter.writeColored(positions: painted.positions, colors: painted.colors,
+                                                indices: painted.indices, to: ply)) != nil {
+                    result.exports.paintedPLY = ply
+                }
+            }
+        }
+        result.exports.reportPDF = generateReportPDF(result, animalID: animalID, scanID: scan.id)
+        return result
     }
 }
 

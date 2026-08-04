@@ -58,16 +58,27 @@ nonisolated struct ProcessedScan: Sendable {
         /// Photo-textured reconstruction (set after reconstruction); nil for the
         /// synthetic demo path.
         var texturedModelURL: URL?
+        /// Full fused LiDAR scene mesh (OBJ), the whole scanned back — set for the
+        /// LiDAR path. Loads reliably in SceneKit (no ModelIO USD dependency).
+        var fusedModelURL: URL?
+        /// Full uncropped captured point cloud (coverage-colored) for the diagnostic
+        /// point-cloud viewer — set for the LiDAR path.
+        var pointCloudURL: URL?
+        /// Photo-painted surface mesh (`PaintedMeshIO`) for the 3D viewer — set for
+        /// the single-shot LiDAR path.
+        var paintedSurfaceURL: URL?
+        /// Photo-painted surface as a colored PLY, for export/sharing.
+        var paintedPLY: URL?
         /// Single-page cross-section report (set by AppModel after processing).
         var reportPDF: URL?
 
-        /// The best model to display in the interactive 3D view: the textured
-        /// reconstruction if present, else the ROI mesh.
-        var viewableModelURL: URL? { texturedModelURL ?? roiUSDZ }
+        /// The best model to display in the interactive 3D view: the photo-textured
+        /// reconstruction, else the full fused LiDAR mesh, else the ROI mesh.
+        var viewableModelURL: URL? { texturedModelURL ?? fusedModelURL ?? roiUSDZ }
 
         /// Files suitable for a share sheet.
         var shareables: [URL] {
-            [reportPDF, viewableModelURL, roiSTL, sectionsDXF, sectionsCSV, metricsCSV].compactMap { $0 }
+            [reportPDF, paintedPLY, viewableModelURL, roiSTL, sectionsDXF, sectionsCSV, metricsCSV].compactMap { $0 }
         }
     }
 }

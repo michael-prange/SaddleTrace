@@ -1,6 +1,7 @@
 import SwiftUI
 import ARKit
 import SceneKit
+import MeshKit
 
 /// Hosts an `ARSCNView` running world tracking with LiDAR scene reconstruction
 /// (Design §6.1). Renders the scene mesh live as **see-through coverage dots**
@@ -17,6 +18,11 @@ struct ARCaptureView: UIViewRepresentable {
         view.automaticallyUpdatesLighting = true
         view.scene.rootNode.addChildNode(context.coordinator.pointsRoot)
         context.coordinator.renderer = CoveragePointCloudRenderer(root: context.coordinator.pointsRoot)
+
+        // Bridge Finish → coordinator: the coordinator writes the fused LiDAR mesh
+        // on its AR queue (where the coverage tracker is safe to read).
+        let coordinator = context.coordinator
+        model.requestMeshExport = { url in coordinator.pendingExportURL = url }
 
         let config = ARWorldTrackingConfiguration()
         if ARWorldTrackingConfiguration.supportsSceneReconstruction(.meshWithClassification) {
@@ -55,6 +61,11 @@ struct ARCaptureView: UIViewRepresentable {
         // retains it), which is why the coverage dots never appeared.
         nonisolated(unsafe) var renderer: CoveragePointCloudRenderer?
 
+        /// Set on the main actor when the user taps Finish; consumed once on the
+        /// AR queue to write the fused LiDAR mesh. One-shot signal.
+        nonisolated(unsafe) var pendingExportURL: URL?
+        private var exportDone = false
+
         private var lastFrameUpdate = CFAbsoluteTimeGetCurrent()
         private var lastMeshUpdate = CFAbsoluteTimeGetCurrent()
 
@@ -64,6 +75,15 @@ struct ARCaptureView: UIViewRepresentable {
         }
 
         func session(_ session: ARSession, didUpdate frame: ARFrame) {
+            // Finish requested: write the fused, coverage-cropped LiDAR mesh once.
+            if let url = pendingExportURL, !exportDone {
+                exportDone = true
+                pendingExportURL = nil
+                let ok = writeFusedMesh(from: frame, to: url)
+                Task { @MainActor [model] in model.meshExportFinished = ok }
+                return
+            }
+
             let now = CFAbsoluteTimeGetCurrent()
             guard now - lastFrameUpdate >= 0.1 else { return }
             lastFrameUpdate = now
@@ -107,6 +127,27 @@ struct ARCaptureView: UIViewRepresentable {
             Task { @MainActor [renderer] in
                 for id in ids { renderer?.remove(id) }
             }
+        }
+
+        /// Writes the fused, coverage-cropped scene mesh (ARKit world, Y-up) to
+        /// `url` as OBJ, plus the full uncropped coverage-colored point cloud beside
+        /// it (`pointcloud.bin`). Runs on the AR queue, where the tracker is safe to read.
+        private func writeFusedMesh(from frame: ARFrame, to url: URL) -> Bool {
+            let anchors = frame.anchors.compactMap { $0 as? ARMeshAnchor }
+
+            // Full captured cloud (uncropped) for the diagnostic viewer — best-effort.
+            let cloud = MeshAnchorGeometry.fusedPointCloud(anchors: anchors, tracker: tracker)
+            if !cloud.points.isEmpty {
+                let cloudURL = url.deletingLastPathComponent().appendingPathComponent("pointcloud.bin")
+                try? PointCloudIO.write(points: cloud.points, colors: cloud.colors, to: cloudURL)
+            }
+
+            let (positions, indices) = MeshAnchorGeometry.fusedScannedMesh(anchors: anchors, tracker: tracker)
+            guard indices.count >= 3 else { return false }
+            do {
+                try MeshIO.writeOBJ(TriangleMesh(positions: positions, indices: indices), to: url)
+                return true
+            } catch { return false }
         }
 
         private static func centreDistance(of frame: ARFrame) -> Double? {

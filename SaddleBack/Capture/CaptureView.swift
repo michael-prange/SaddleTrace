@@ -15,6 +15,8 @@ struct CaptureView: View {
     @State private var model = CaptureModel()
     @State private var framesDirectory = FileManager.default.temporaryDirectory
         .appendingPathComponent("capture_\(UUID().uuidString)", isDirectory: true)
+    @State private var finishing = false
+    @State private var didFinish = false
 
     var body: some View {
         ZStack {
@@ -43,15 +45,21 @@ struct CaptureView: View {
                     }
                     Spacer()
                     Button {
-                        onFinish(framesDirectory)
-                        dismiss()
+                        beginFinish()
                     } label: {
-                        Text("Finish Scan")
-                            .font(.headline)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 6)
+                        Group {
+                            if finishing {
+                                HStack { ProgressView().tint(.white); Text("Finishing…") }
+                            } else {
+                                Text("Finish Scan")
+                            }
+                        }
+                        .font(.headline)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 6)
                     }
                     .buttonStyle(.borderedProminent)
+                    .disabled(finishing)
                     .padding()
                 }
             } else {
@@ -72,6 +80,26 @@ struct CaptureView: View {
             .padding()
         }
         .statusBarHidden()
+        .onChange(of: model.meshExportFinished) { completeFinish() }
+    }
+
+    /// Ask the AR coordinator to write the fused LiDAR mesh, then finish. Falls
+    /// back to finishing anyway if no frame arrives to export within a moment.
+    private func beginFinish() {
+        guard !finishing else { return }
+        finishing = true
+        model.requestMeshExport?(framesDirectory.appendingPathComponent("lidar.obj"))
+        Task {
+            try? await Task.sleep(for: .seconds(3))
+            completeFinish()
+        }
+    }
+
+    private func completeFinish() {
+        guard finishing, !didFinish else { return }
+        didFinish = true
+        onFinish(framesDirectory)
+        dismiss()
     }
 
     private var coverageBar: some View {

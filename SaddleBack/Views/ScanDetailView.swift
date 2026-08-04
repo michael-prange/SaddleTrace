@@ -1,8 +1,7 @@
 import SwiftUI
 
 /// Shows a scan's status and, once processed, its landmarks, per-station metrics,
-/// and a share sheet for the exported files. Until capture/reconstruction exist,
-/// "Process" runs the pipeline on a synthetic back mesh.
+/// and a share sheet for the exported files.
 struct ScanDetailView: View {
     let animal: AnimalRecord
     @State var scan: ScanRecord
@@ -69,30 +68,15 @@ struct ScanDetailView: View {
                 }
                 .disabled(isProcessing)
             } footer: {
-                Text("Builds a 3D mesh from the captured frames, then extracts the saddle geometry.")
+                Text("Builds a 3D mesh from the captured shot, then extracts the saddle geometry.")
             }
         } else {
             Section {
-                Button { process() } label: {
-                    if isProcessing { HStack { ProgressView(); Text("Processing…") } }
-                    else { Label("Process Demo Mesh", systemImage: "gearshape.2") }
-                }
-                .disabled(isProcessing)
+                Text("No captured data for this scan.")
+                    .foregroundStyle(.secondary)
             } footer: {
-                Text(appModel.canReconstruct
-                     ? "No captured frames for this scan — runs the pipeline on a synthetic back mesh."
-                     : "This device can't reconstruct — runs the pipeline on a synthetic back mesh.")
+                Text("Take a new scan — capture a single LiDAR shot of the saddle area.")
             }
-        }
-    }
-
-    private func process() {
-        isProcessing = true
-        Task {
-            let outcome = await appModel.processScan(scan, for: animal.id)
-            result = outcome
-            scan.status = outcome != nil ? .complete : .failed
-            isProcessing = false
         }
     }
 

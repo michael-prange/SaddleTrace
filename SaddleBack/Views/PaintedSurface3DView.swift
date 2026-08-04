@@ -61,6 +61,9 @@ private struct PaintedSurfaceSCNView: UIViewRepresentable {
             let radius = simd_length(hi - lo) / 2
             let dist = max(radius, 0.05) * 3
             let camera = SCNCamera()
+            // Orthographic: true proportions, no perspective vertical exaggeration.
+            camera.usesOrthographicProjection = true
+            camera.orthographicScale = Double(max(radius, 0.05))
             camera.zNear = 0.001
             camera.zFar = Double(dist) * 10
             let cameraNode = SCNNode()

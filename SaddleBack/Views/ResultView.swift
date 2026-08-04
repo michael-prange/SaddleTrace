@@ -10,6 +10,7 @@ struct ResultView: View {
 
     @State private var stationIndex = 0
     @State private var showing3D = false
+    @State private var showingCloud = false
     @AppStorage("measurementSystem") private var systemRaw = MeasurementSystem.metric.rawValue
 
     private var system: MeasurementSystem { MeasurementSystem(rawValue: systemRaw) ?? .metric }
@@ -24,8 +25,15 @@ struct ResultView: View {
             exportSection
         }
         .sheet(isPresented: $showing3D) {
-            if let url = result.exports.viewableModelURL {
+            if let painted = result.exports.paintedSurfaceURL {
+                PaintedSurface3DView(url: painted)
+            } else if let url = result.exports.viewableModelURL {
                 Model3DView(url: url)
+            }
+        }
+        .sheet(isPresented: $showingCloud) {
+            if let url = result.exports.pointCloudURL {
+                PointCloud3DView(url: url)
             }
         }
         .onAppear {
@@ -122,13 +130,20 @@ struct ResultView: View {
                     Label("View 3D Model", systemImage: "rotate.3d")
                 }
             }
+            if result.exports.pointCloudURL != nil {
+                Button {
+                    showingCloud = true
+                } label: {
+                    Label("View Point Cloud", systemImage: "aqi.medium")
+                }
+            }
             if let pdf = result.exports.reportPDF {
                 ShareLink(item: pdf) {
                     Label("Share Cross-Section PDF", systemImage: "doc.richtext")
                 }
             }
             ShareLink(items: result.exports.shareables) {
-                Label("Share All Exports (PDF · STL · USDZ · DXF · CSV)", systemImage: "square.and.arrow.up")
+                Label("Share All Exports (PDF · PLY · STL · DXF · CSV)", systemImage: "square.and.arrow.up")
             }
         } footer: {
             Text("Drag to rotate, pinch to zoom, two fingers to pan. STL exports the back mesh for CAD/3D-print.")

@@ -1,8 +1,40 @@
 import Foundation
+import simd
 import MeshKit
 
 /// Writes a mesh as ASCII PLY (Design §11 mesh/point-cloud fallback).
 public enum PLYWriter {
+
+    /// Writes a per-vertex-colored PLY (positions + RGB + triangle faces). Colors
+    /// are 0–1 floats, emitted as `uchar` 0–255. Used for the photo-painted surface.
+    public static func coloredPLY(positions: [SIMD3<Float>], colors: [SIMD3<Float>],
+                                  indices: [UInt32]) -> String {
+        let n = min(positions.count, colors.count)
+        var out = "ply\nformat ascii 1.0\ncomment SaddleBack painted surface\n"
+        out += "element vertex \(n)\n"
+        out += "property float x\nproperty float y\nproperty float z\n"
+        out += "property uchar red\nproperty uchar green\nproperty uchar blue\n"
+        out += "element face \(indices.count / 3)\n"
+        out += "property list uchar int vertex_indices\n"
+        out += "end_header\n"
+        func byte(_ v: Float) -> Int { min(max(Int(v * 255), 0), 255) }
+        for i in 0..<n {
+            let p = positions[i], c = colors[i]
+            out += "\(fmt(p.x)) \(fmt(p.y)) \(fmt(p.z)) \(byte(c.x)) \(byte(c.y)) \(byte(c.z))\n"
+        }
+        var t = 0
+        while t + 2 < indices.count {
+            out += "3 \(indices[t]) \(indices[t + 1]) \(indices[t + 2])\n"
+            t += 3
+        }
+        return out
+    }
+
+    public static func writeColored(positions: [SIMD3<Float>], colors: [SIMD3<Float>],
+                                    indices: [UInt32], to url: URL) throws {
+        try coloredPLY(positions: positions, colors: colors, indices: indices)
+            .write(to: url, atomically: true, encoding: .utf8)
+    }
 
     public static func ply(from mesh: TriangleMesh) -> String {
         var out = "ply\n"

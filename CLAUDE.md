@@ -201,6 +201,175 @@ XY; spine = max-Z per slice.
   delegate → can't be an actor; dispatches self onto serial sessionQueue). Hot-
   path Tasks tightened to capture model/renderer so self-use is minimal/justified.
 
+## Ortho viewers + colored PLY export (2026-08-04), NOT device-verified
+- Perceived VERTICAL EXAGGERATION: geometry is isometric (viewers push world coords
+  straight to SCNVector3, no per-axis scale; unprojection is metric). Cause = default
+  PERSPECTIVE camera foreshortening. Fix: all 3 viewers (Painted/PointCloud/Model3D)
+  now `usesOrthographicProjection=true`, `orthographicScale≈model half-extent` → true
+  proportions. If exaggeration persists on-device after this, it'd be real (it isn't
+  expected to).
+- COLORED PLY export: `PLYWriter.coloredPLY/writeColored(positions:colors:indices:)`
+  (ASCII, uchar RGB). `makeResult` reads `surface.bin` → writes `exports/surface.ply`
+  → `Exports.paintedPLY`, added to `shareables` (STL stays uncolored geometry).
+  ResultView share label → "PDF · PLY · STL · DXF · CSV". ExportKit 9/9.
+- FRONT one-snap: FEASIBLE — same DepthGridMesh math on a single `AVDepthData` frame
+  (front TrueDepth), no streaming/photogrammetry, no world pose. Coarser/shorter-range
+  than LiDAR. Deferred (trip = Pro/LiDAR); offered to build post-trip.
+
+## Photo-painted surface (2026-08-04), NOT device-verified
+- Single-shot makes painting TRIVIAL: each mesh vertex = one depth pixel = one photo
+  pixel. `DepthGridMesh` renders `frame.capturedImage` (CIImage→CGImage→top-row RGBA8
+  bitmap, Y-flipped so row0=top to match depth) and samples per-vertex `photoColors`.
+  Result gains `photoColors` (parallel to points; kept through largest-component
+  compaction). Confidence colors STILL kept for the point-cloud diagnostic.
+- `PaintedMeshIO` (positions+colors+indices binary) → `frames/surface.bin` written at
+  capture. `Exports.paintedSurfaceURL` set in makeResult (materialize). New
+  `PaintedSurface3DView` builds a colored SCNGeometry (triangles, `.color` source,
+  lightingModel `.constant` = unlit so the photo reads as-is), recenter+framed+target.
+  ResultView "View 3D Model" prefers painted surface, else gray Model3DView.
+- STL stays UNCOLORED (geometry-only, correct for CAD). Colored PLY export = easy
+  future add if wanted.
+- DEVICE-ONLY checks: photo not mirrored/upside-down on the surface (the RGB Y-flip +
+  depth CV→ARKit flip must agree); colors look right (CIContext YCbCr→RGB).
+- TEST FILE TO DELETE (Michael, in Xcode): `SaddleBackUITests/ResultViewUITest.swift`
+  (obsolete demo-driven flow). `ScanProcessorTests.swift` repurposed → KEEP.
+
+## Spine-by-symmetry + demo removal + 3D rotation fix (2026-08-04), NOT device-verified
+- SPINE now by MAX SYMMETRY (Michael's method, replaces "highest vertex per slice"
+  which let a noise spike hijack the crest → mis-centred sections). `SpineCurveFitter`:
+  per slab build top-envelope profile (max Z per 5 mm lateral bin), among bins within
+  3 cm of the slab top pick the centre minimizing Σ(zL−zR)² over mirrored pairs to
+  ±8 cm (`crestBySymmetry`); fallback to max-Z vertex if sparse. Lateral spline now
+  tightly weighted (centre is stable). MeshKit 31/31, ExportKit 9/9 still pass
+  (symmetric synthetic back → y≈0, height peaks at withers — unaffected).
+- DEMO MESH REMOVED (Michael): deleted `AppModel.processScan` + SyntheticBackMesh app
+  usage + loadResult demo fallback + ScanDetailView "Process Demo Mesh" branch (now
+  shows "No captured data") + "Use Demo Scan" buttons (LiDARShot/TrueDepth views).
+  Repurposed the two demo-dependent tests (ScanProcessorTests → record plumbing;
+  ResultViewUITest → add-animal/settings smoke) — files kept (pbxproj refs).
+  SyntheticBackMesh STAYS in MeshKit (package test fixture).
+- 3D ROTATION FIX: Model3DView + PointCloud3DView set
+  `defaultCameraController.target = SCNVector3Zero` so orbit pivots on the model
+  (already recentered to origin) instead of a default point.
+- STILL TODO: paint surface w/ photo (trivial for single-shot — vertex=pixel).
+
+## Single-shot WORKS (2026-08-04) — cleanup pass + remaining asks
+- 1st single-shot on Penelope: recognizable back surface + point cloud. GOOD. Issues:
+  (1) point-cloud OUTLIERS (disconnected arm/ground/floaters); (2) cross-sections
+  ROUGH + not nesting (spine picked as noisy max-Z, mis-centers sections);
+  (3) instructions metric while units=inches; (4) "Start Scan" btn misleading.
+- DONE this turn (capture-side, no MeshKit change): `DepthGridMesh` now (a) 3×3
+  MEDIAN filter on depth pre-unproject (smoother sections/surface), (b) keeps only
+  the LARGEST connected component via union-find (drops all disconnected outliers
+  from mesh AND cloud). Instructions unit-aware (@AppStorage measurementSystem);
+  button → "OK".
+- STILL TO DO (Michael's asks, bigger, own verification each):
+  (A) SPINE by MAX SYMMETRY (his method): fit low-order spline, per slice pick the
+  lateral center of best L/R mirror symmetry instead of max-Z peak — noise-robust,
+  fixes section centering/alignment. MeshKit change (SpineCurveFitter), has tests.
+  (B) PAINT SURFACE w/ PHOTO: TRIVIAL for single-shot — each mesh vertex = one depth
+  pixel = one RGB pixel (no multi-view baking). Sample frame.capturedImage per
+  vertex → vertex colors; render colored surface (needs colored-geometry path or
+  colored PLY; Model3DView loads URL via SCNScene). Recommend do after seeing if
+  cleanup alone improved sections.
+
+## PIVOT: single-shot LiDAR "depth photograph" (2026-08-04), NOT device-verified
+- 3 sweeps in a row FAILED to process → abandoned the sweep+fuse+crop approach.
+  ROOT CAUSE of all rear failures: reconstructing from ARKit's FUSED SCENE MESH
+  (ARMeshAnchors) — sparse, re-tessellated, drift-prone; MeshKit spine fit throws on
+  the fragmented result. NEW primitive: a SINGLE ARKit `sceneDepth` frame → dense
+  grid mesh. One instant, no sweep, no fusion, no drift. Michael's idea; correct.
+- `DepthGridMesh.build(from: ARFrame)`: unproject sceneDepth (256×192) with
+  intrinsics scaled to depth res, CV→ARKit cam flip (x, −y, −z), world = cam*p;
+  keep conf ≥ medium, depth ≤1.5 m; triangulate the pixel grid, DROP quads whose
+  corner-depth spread >4 cm (no bridging back→ground). Returns dense TriangleMesh
+  (world Y-up) + point cloud (+conf colors green/yellow). ~50k verts.
+- `LiDARShotCaptureView` + `LiDARShotModel`: ARSCNView preview (sceneDepth, no mesh
+  recon), dashed 4:5 FRAMING BOX ("fill with ~20 in of back"), DistanceHUD band
+  0.50–0.70 m (~20 in footprint), single shutter → build mesh on main, write
+  lidar.obj + pointcloud.bin off-main → "Use This Shot"/Retake. Routed as the rear
+  default in ScanListView (was CaptureView sweep, kept for reference).
+- GOAL is just the ~20 in SADDLE region (not withers→tail); 1 m too high to hold —
+  ~0.6 m gives ~20 in. Hold low + angle forward is fine (depth is 3D). Ultra-wide
+  NOT usable (ARKit LiDAR locked to wide cam).
+- Reuses existing recon path: frames/lidar.obj → yUpToZUp → MeshKit process
+  (dense mesh → spine fit SHOULD succeed). Both viewers already wired: "View 3D
+  Model" (surface=lidar.obj) + "View Point Cloud" (pointcloud.bin). Instructions
+  rewritten for single-shot.
+- WHY confident: LandmarkDetector never throws (withers=max height, tail=curve end);
+  failures were spine-fit on fragmented mesh — dense single-shot mesh fixes that.
+- DEVICE-ONLY unverified: check the CV→ARKit unprojection convention (mesh not
+  mirrored/inverted), footprint size vs distance band, spine fit succeeds on a 20 in
+  mid-back segment (withers-anchoring may pick an arbitrary high point — acceptable).
+
+## 5th test — "more passes = WORSE" + point-cloud viewer (2026-08-03), NOT redeployed
+- Michael scanned spine + 2× each side, repeated → MORE holes, unrecognizable.
+  Counterintuitive (more coverage should = fewer dropped faces). Leading causes to
+  disambiguate: (a) ARKit world drift/relocalization over long session → ghosted/
+  doubled shells; (b) coverage-voxel vs final re-tessellated-mesh mismatch → crop
+  drops good faces as "uncovered". Did NOT change crop (Michael keeps strict).
+- Added DIAGNOSTIC POINT-CLOUD VIEWER (his request): at Finish, besides cropped
+  `lidar.obj`, write `frames/pointcloud.bin` = ALL mesh-anchor verts (UNCROPPED),
+  coverage-colored r/y/g (`MeshAnchorGeometry.fusedPointCloud`, `PointCloudIO`
+  UInt32 count + 6×Float32/pt). `ProcessedScan.Exports.pointCloudURL` set in
+  makeResult (materialize). `PointCloud3DView` (SceneKit points via existing
+  `SceneKitPointCloud.geometry`, recenter+framed cam). ResultView "View Point Cloud".
+- READS: if cloud looks GOOD but mesh has holes → crop/voxel mismatch is the bug
+  (fix crop). If cloud itself sparse/holey/ghosted → capture/drift problem. Green =
+  what the crop keeps; lots of red on the back = coverage crediting under-firing.
+
+## 4th Penelope test — LiDAR mesh WORKS; fixes (2026-08-03), NOT yet redeployed
+- LiDAR fused-mesh rear path CONFIRMED on device: gray mesh is recognizably the
+  back, coverage crop excluded grass. Holes + a bit of the operator present.
+  Michael's call: KEEP strict crop (faces seen ≥2×), rely on MULTI-PASS technique
+  (with LiDAR fusion, multiple slow overlapping passes now HELP — reversal of the
+  old photogrammetry advice). No crop code change.
+- FIX 3D-viewer-absent: for LiDAR, `texturedModelURL` nil → viewer fell back to
+  `roiUSDZ` (ModelIO USD exporter, unreliable on device) → nil → no button. Added
+  `ProcessedScan.Exports.fusedModelURL` (the full `lidar.obj`); `viewableModelURL =
+  textured ?? fused ?? roiUSDZ`. Threaded through loadReconstructedMesh/makeResult/
+  reconstructScan. `Model3DView` now flattens+recenters the loaded model and adds an
+  explicit framed camera (fused mesh sits far from ARKit world origin → default cam
+  couldn't see it). Shows the full back; OBJ loads in SceneKit w/o ModelIO USD.
+- FIX front no-haptic: `TrueDepthCaptureModel.apply(distance:scanning:savedFrames:)`
+  emits a light tick per NEWLY-saved frame while scanning (honest: no ticks = not
+  saving). Controller routes its sample through it.
+- Instructions (`ScanInstructionsView`): slow overlapping passes + "keep yourself
+  out of frame" + green-is-kept.
+- OPEN (front, device-only, NOT trip-critical — trip = Michael's Pro/LiDAR): front
+  scan saved ZERO real frames → fell back to synthetic demo (2 s, arcs-of-circles
+  STL, no 3D, distance bar stuck). The AVCaptureDataOutputSynchronizer delegate
+  isn't delivering synced frames on device. Next test tells via haptic ticks: no
+  ticks after Start = pipeline dead (need on-device logs); ticks = saving now.
+
+## REAR path → LiDAR fused mesh (2026-08-03, NOT device-verified)
+- WHY: rear reconstruction used PhotogrammetrySession (image SfM) over saved HEICs,
+  IGNORING LiDAR depth → warped/holed mesh + fused-in grass on Penelope (3-pass
+  sweep = drift/low-overlap/low-texture). Now the rear/LiDAR path builds the model
+  DIRECTLY from ARKit's fused scene mesh (`ARMeshAnchor`s) — movement-tolerant,
+  metric, no texture needed. TrueDepth/front path KEEPS photogrammetry.
+- HOW: at Finish, `MeshAnchorGeometry.fusedScannedMesh(anchors:tracker:)` combines
+  all mesh anchors into ONE world-space (ARKit Y-up) mesh, keeping only faces whose
+  centroid the `CoverageTracker` marks ≥ .partial (state != .uncovered). That crops
+  ground/surroundings for free: tracker only credits faces seen at 0.30–1.00 m +
+  ≤45° — the back scanned up-close qualifies, ground (~1.2 m below phone) doesn't.
+  Vertices compacted (no unreferenced pts to bias PCA). Written as `frames/lidar.obj`.
+- BRIDGE: `CaptureModel.requestMeshExport`/`meshExportFinished`; `CaptureView` Finish
+  → `beginFinish()` sets `Coordinator.pendingExportURL` (nonisolated(unsafe), one-shot),
+  consumed on next AR frame in `didUpdate frame` (tracker read on AR queue = safe),
+  writes OBJ via `MeshIO.writeOBJ`, notifies model → `completeFinish()` (3 s timeout
+  fallback). "Finishing…" spinner on the button.
+- RECON: `AppModel.reconstructScan` branches — `lidar.obj` present → `MeshIO.readOBJ`
+  → yUpToZUp → MeshKit pipeline (topRegionMinHeight −1e6, no floor strip); no
+  PhotogrammetrySession. Else TrueDepth → photogrammetry as before. Shared
+  `makeResult()` + `loadReconstructedMesh()` (lidar.obj preferred, else model.usdz)
+  used by reconstruct AND loadResult. `autoReconstruct` fires on lidar mesh OR
+  frames+support. LiDAR result is UNTEXTURED → 3D view falls back to roi.usdz
+  (cropped back). OLD stuck scans have no lidar.obj → rescan for the new path.
+- Builds clean (Swift 6). DEVICE-ONLY verification (sim has no LiDAR): fused mesh
+  crops to back? PCA/spine lock on? result looks "amazing"? Suggest updating
+  ScanInstructions to "one slow pass down the spine" (FOV @40–60cm covers ±8").
+
 ## Field-bug fixes — 3rd Penelope test (2026-08-03), NOT yet redeployed
 - ROOT BUG (scans stuck "Awaiting reconstruction" forever): reconstruction was
   MANUAL-ONLY (only via ScanDetailView "Reconstruct Scan" button). `finishCapture`

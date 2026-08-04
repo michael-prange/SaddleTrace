@@ -15,12 +15,16 @@ final class LiDARShotModel {
     var isBusy = false
     var errorText: String?
 
+    /// The just-captured cloud, shown immediately for review before saving is done.
+    var capturedPoints: [SIMD3<Float>] = []
+    var capturedColors: [SIMD3<Float>] = []
+
     /// Set by the preview: reads the current frame, builds the mesh + cloud, saves.
     var capture: (() -> Void)?
 
-    // Comfortable holding band for a ~20 in footprint (m).
-    let nearLimit = 0.45
-    let farLimit = 0.65
+    // Comfortable holding band for a ~20 in footprint (m); ~0.6 m frames ~20 in.
+    let nearLimit = 0.50
+    let farLimit = 0.70
 
     func classify(_ d: Double?) -> CaptureDistanceState {
         guard let d else { return .noSurface }
@@ -45,26 +49,12 @@ struct LiDARShotCaptureView: View {
 
     var body: some View {
         ZStack {
-            if CaptureCapabilities.hasLiDAR {
-                ARDepthPreview(model: model, framesDirectory: framesDirectory)
-                    .ignoresSafeArea()
-
-                framingOverlay
-
-                HStack {
-                    Spacer()
-                    DistanceHUD(state: model.state, distanceMeters: model.distanceMeters,
-                                nearLimit: model.nearLimit, farLimit: model.farLimit)
-                }
-                .padding()
-
-                VStack {
-                    banner
-                    Spacer()
-                    controls
-                }
-            } else {
+            if !CaptureCapabilities.hasLiDAR {
                 unsupported
+            } else if model.shotCaptured {
+                reviewView
+            } else {
+                liveCaptureView
             }
         }
         .overlay(alignment: .topLeading) {
@@ -79,6 +69,74 @@ struct LiDARShotCaptureView: View {
             .padding()
         }
         .statusBarHidden()
+    }
+
+    // MARK: Live capture
+
+    private var liveCaptureView: some View {
+        ZStack {
+            ARDepthPreview(model: model, framesDirectory: framesDirectory)
+                .ignoresSafeArea()
+
+            framingOverlay
+
+            HStack {
+                Spacer()
+                DistanceHUD(state: model.state, distanceMeters: model.distanceMeters,
+                            nearLimit: model.nearLimit, farLimit: model.farLimit)
+            }
+            .padding()
+
+            VStack {
+                banner
+                Spacer()
+                shutter
+            }
+        }
+    }
+
+    // MARK: Review (instant 3D point cloud)
+
+    private var reviewView: some View {
+        ZStack {
+            StaticPointCloudView(points: model.capturedPoints, colors: model.capturedColors)
+                .ignoresSafeArea()
+                .background(.black)
+
+            VStack {
+                Text("Rotate to inspect — retake if the back isn't fully captured")
+                    .font(.callout).foregroundStyle(.white)
+                    .padding(.horizontal, 14).padding(.vertical, 8)
+                    .background(.black.opacity(0.5), in: Capsule())
+                    .padding(.top, 8)
+                Spacer()
+                HStack(spacing: 12) {
+                    Button {
+                        cleanupTemp()
+                        model.capturedPoints = []; model.capturedColors = []
+                        model.shotCaptured = false
+                    } label: {
+                        Label("Retake", systemImage: "arrow.counterclockwise")
+                            .frame(maxWidth: .infinity).padding(.vertical, 6)
+                    }
+                    .buttonStyle(.bordered).tint(.white)
+
+                    Button {
+                        onFinish(framesDirectory)
+                        dismiss()
+                    } label: {
+                        HStack {
+                            if model.isBusy { ProgressView().tint(.white) }
+                            Text(model.isBusy ? "Saving…" : "Use This Shot")
+                        }
+                        .font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.isBusy)
+                }
+                .padding()
+            }
+        }
     }
 
     // MARK: Overlay
@@ -118,41 +176,18 @@ struct LiDARShotCaptureView: View {
 
     // MARK: Controls
 
-    @ViewBuilder
-    private var controls: some View {
-        if model.shotCaptured {
-            HStack(spacing: 12) {
-                Button {
-                    cleanupTemp()
-                    model.shotCaptured = false
-                } label: {
-                    Label("Retake", systemImage: "arrow.counterclockwise")
-                        .frame(maxWidth: .infinity).padding(.vertical, 6)
-                }
-                .buttonStyle(.bordered).tint(.white)
-
-                Button {
-                    onFinish(framesDirectory)
-                    dismiss()
-                } label: {
-                    Text("Use This Shot").font(.headline).frame(maxWidth: .infinity).padding(.vertical, 6)
-                }
-                .buttonStyle(.borderedProminent)
+    private var shutter: some View {
+        Button {
+            model.capture?()
+        } label: {
+            ZStack {
+                Circle().stroke(.white, lineWidth: 5).frame(width: 74, height: 74)
+                Circle().fill(.white).frame(width: 60, height: 60)
+                if model.isBusy { ProgressView() }
             }
-            .padding()
-        } else {
-            Button {
-                model.capture?()
-            } label: {
-                ZStack {
-                    Circle().stroke(.white, lineWidth: 5).frame(width: 74, height: 74)
-                    Circle().fill(.white).frame(width: 60, height: 60)
-                    if model.isBusy { ProgressView() }
-                }
-            }
-            .disabled(model.isBusy)
-            .padding(.bottom, 28)
         }
+        .disabled(model.isBusy)
+        .padding(.bottom, 28)
     }
 
     private var unsupported: some View {
@@ -161,7 +196,6 @@ struct LiDARShotCaptureView: View {
         } description: {
             Text("Single-shot capture needs a Pro iPhone with a LiDAR scanner.")
         } actions: {
-            Button("Use Demo Scan") { onFinish(nil); dismiss() }
             Button("Close") { onCancel(nil); dismiss() }
         }
     }
@@ -199,6 +233,10 @@ private struct ARDepthPreview: UIViewRepresentable {
             guard let result = DepthGridMesh.build(from: frame) else {
                 model.errorText = "No depth captured — move a little and retry"; return
             }
+            // Show the cloud immediately for review; saving finishes in the background.
+            model.capturedPoints = result.points
+            model.capturedColors = result.colors
+            model.shotCaptured = true
             model.isBusy = true
             model.errorText = nil
             let dir = framesDirectory
@@ -209,6 +247,10 @@ private struct ARDepthPreview: UIViewRepresentable {
                     try MeshIO.writeOBJ(result.mesh, to: dir.appendingPathComponent("lidar.obj"))
                     try PointCloudIO.write(points: result.points, colors: result.colors,
                                            to: dir.appendingPathComponent("pointcloud.bin"))
+                    // Photo-painted surface for the 3D viewer.
+                    try PaintedMeshIO.write(positions: result.mesh.positions, colors: result.photoColors,
+                                            indices: result.mesh.indices,
+                                            to: dir.appendingPathComponent("surface.bin"))
                 } catch { ok = false }
                 await MainActor.run {
                     model.isBusy = false

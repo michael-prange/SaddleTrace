@@ -54,9 +54,11 @@ struct ScanListView: View {
                                          onFinish: { finishCapture(mode: .trueDepth, tempFrames: $0) },
                                          onCancel: { cancelCapture(tempFrames: $0) })
                 } else {
-                    CaptureView(animal: animal,
-                                onFinish: { finishCapture(mode: .lidar, tempFrames: $0) },
-                                onCancel: { cancelCapture(tempFrames: $0) })
+                    // Rear LiDAR: single-shot depth capture (replaces the sweep,
+                    // which drifted/fragmented). CaptureView remains for reference.
+                    LiDARShotCaptureView(animal: animal,
+                                         onFinish: { finishCapture(mode: .lidar, tempFrames: $0) },
+                                         onCancel: { cancelCapture(tempFrames: $0) })
                 }
             }
         }
