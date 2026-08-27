@@ -26,7 +26,7 @@ struct ResultView: View {
         }
         .sheet(isPresented: $showing3D) {
             if let painted = result.exports.paintedSurfaceURL {
-                PaintedSurface3DView(url: painted)
+                PaintedSurface3DView(url: painted, tracingsURL: result.exports.tracingsURL)
             } else if let url = result.exports.viewableModelURL {
                 Model3DView(url: url)
             }

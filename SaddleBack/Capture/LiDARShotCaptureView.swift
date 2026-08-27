@@ -239,6 +239,10 @@ private struct ARDepthPreview: UIViewRepresentable {
             model.shotCaptured = true
             model.isBusy = true
             model.errorText = nil
+            // Raw capture inputs (photo + depth + confidence + calibration), extracted
+            // while the frame is valid, so the whole build can be re-run on the archive
+            // when the code improves.
+            let raw = RawShotWriter.extract(from: frame)
             let dir = framesDirectory
             Task.detached {
                 var ok = true
@@ -252,6 +256,7 @@ private struct ARDepthPreview: UIViewRepresentable {
                                             indices: result.mesh.indices,
                                             to: dir.appendingPathComponent("surface.bin"))
                 } catch { ok = false }
+                RawShotWriter.persist(raw, to: dir)
                 await MainActor.run {
                     model.isBusy = false
                     model.shotCaptured = ok

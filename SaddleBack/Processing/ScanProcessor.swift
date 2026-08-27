@@ -45,6 +45,12 @@ nonisolated struct ProcessedScan: Sendable {
     /// Topline "rocker": sampled `(arcLength, height)` pairs along the ROI, in metres.
     var rocker: [SIMD2<Double>]
     var roiTriangleCount: Int
+    /// Spine curve sampled in 3D over the ROI (normalized Z-up frame), for the
+    /// tracings overlaid on the 3D model.
+    var spinePolyline: [SIMD3<Double>]
+    /// World→normalized rigid transform applied by `LongAxisNormalizer` (rotation
+    /// about vertical). Invertible to map spine/sections back to the capture frame.
+    var normalizeTransform: simd_float4x4
     var exports: Exports
 
     struct Exports: Sendable {
@@ -69,6 +75,9 @@ nonisolated struct ProcessedScan: Sendable {
         var paintedSurfaceURL: URL?
         /// Photo-painted surface as a colored PLY, for export/sharing.
         var paintedPLY: URL?
+        /// Spine + cross-section tracings (world/capture frame) for overlay on the
+        /// painted 3D model — set by AppModel after processing.
+        var tracingsURL: URL?
         /// Single-page cross-section report (set by AppModel after processing).
         var reportPDF: URL?
 
@@ -111,7 +120,8 @@ actor ScanProcessor {
         stationSpacing: Double = 0.02, topRegionMinHeight: Float = 0.8
     ) throws -> ProcessedScan {
         // Geometry pipeline.
-        let normalized = LongAxisNormalizer.normalized(mesh, topRegionMinHeight: topRegionMinHeight).mesh
+        let normResult = LongAxisNormalizer.normalized(mesh, topRegionMinHeight: topRegionMinHeight)
+        let normalized = normResult.mesh
         var spineConfig = SpineCurveFitter.Configuration()
         spineConfig.topRegionMinHeight = topRegionMinHeight
         guard let fit = SpineCurveFitter.fit(normalized, configuration: spineConfig) else { throw ProcessingError.spineFitFailed }
@@ -139,12 +149,16 @@ actor ScanProcessor {
         let sections = CrossSectionExtractor.extract(cropped, curve: curve, atArcLengths: stationArcs, configuration: cfg)
         let metrics = sections.map { SectionMetricsCalculator.metrics(for: $0, curve: curve) }
 
-        // Sample the topline "rocker" from withers to tail at ~1 cm.
+        // Sample the topline "rocker" (arc, height) and the 3D spine polyline over
+        // the ROI at ~1 cm.
         var rocker: [SIMD2<Double>] = []
+        var spinePolyline: [SIMD3<Double>] = []
         let steps = max(Int(abs(endS - startS) / 0.01), 1)
         for i in 0...steps {
             let rs = startS + (endS - startS) * Double(i) / Double(steps)
-            rocker.append(SIMD2<Double>(rs, curve.point(atArcLength: rs).z))
+            let p = curve.point(atArcLength: rs)
+            rocker.append(SIMD2<Double>(rs, p.z))
+            spinePolyline.append(p)
         }
 
         // Ensure the destination directories exist.
@@ -184,6 +198,8 @@ actor ScanProcessor {
             sections: sections,
             rocker: rocker,
             roiTriangleCount: cropped.triangleCount,
+            spinePolyline: spinePolyline,
+            normalizeTransform: normResult.transform,
             exports: .init(
                 roiOBJ: roiOBJ, roiUSDZ: writtenUSDZ, roiSTL: roiSTL, sectionsDXF: sectionsDXF,
                 sectionsCSV: sectionsCSV, metricsCSV: metricsCSV, spineJSON: spineJSON,

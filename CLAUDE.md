@@ -201,6 +201,65 @@ XY; spine = max-Z per slice.
   delegate → can't be an actor; dispatches self onto serial sessionQueue). Hot-
   path Tasks tightened to capture model/renderer so self-use is minimal/justified.
 
+## Raw-shot archive + migration removed (2026-08-27)
+- SAVE RAW SHOT: `RawShotWriter` writes photo.heic + depth.bin + confidence.bin +
+  shot.json (intrinsics/imageRes/cameraTransform/depth dims) into the scan's frames/
+  at single-shot capture. `extract(from:ARFrame)` on main (encodes HEIC ~200ms) →
+  Sendable `RawShot` → `persist` off-main in the existing detached write Task in
+  `LiDARShotCaptureView`. importFrames moves them into the scan. GOAL: re-run the
+  full `DepthGridMesh` build (geometry + paint) on the WHOLE archive when code
+  improves. NOTE: the reprocess PATH itself is NOT built yet — only the inputs are
+  saved. `hasCapturedFrames` now true for single-shot (photo.heic present) but
+  reconstruct still routes by lidar.obj first, so no photogrammetry misroute.
+- REMOVED retro height-clip migration (was a no-op / marker-blocked-retry, and moot
+  once we learned the real bug was flipped paint): deleted `AppModel.
+  migrateHeightClipIfNeeded` + its loadResult call. `MeshHeightClip.swift` blanked —
+  MICHAEL TO DELETE the file in Xcode.
+
+## PAINT was vertically mirrored (2026-08-27) — root cause of "grass on the back"
+- Michael's diagnosis (correct): geometry was horse-shaped but PAINTED with grass in
+  wrong places → photo→vertex mapping flipped, not a grass-geometry problem. The
+  height clip WAS removing grass geometry; the flipped paint put grass color on top.
+- ROOT CAUSE: `DepthGridMesh` sampled color via `CIImage(cvPixelBuffer:)`→
+  `createCGImage`→ flipped CGContext. CIImage's bottom-left origin + the manual flip
+  net to a VERTICAL MIRROR vs the depth map. FIX: sample `frame.capturedImage`
+  DIRECTLY (both it and the depth map are CVPixelBuffers, row 0 = top → aligned).
+  Read 420 YCbCr bi-planar (luma plane 0, Cb/Cr plane 1 half-res), BT.601 → RGB,
+  video/full-range aware. No CIImage/CGContext. depth (x,y)→luma (x·lumaW/w,
+  y·lumaH/h). Removed CoreImage/CoreGraphics imports + ciContext.
+- ⚠️ OLD single-shot scans have the wrong colors BAKED into surface.bin, and the
+  source photo is NOT retained (LiDARShotCaptureView saves only lidar.obj/pointcloud/
+  surface). So old scans CANNOT be re-painted — needs a NEW capture to verify. The
+  retro height-clip migration is now moot for this issue (was about grass geometry).
+  NOTE: consider saving the shot's HEIC so future scans could be recolored.
+
+## Grass clip + 3D tracings (2026-08-18), NOT device-verified
+- GRASS-IN-MODEL root cause: barrel→ground is a GENTLE slope (per-pixel depth steps
+  < maxEdgeJump 4cm) so the mesh bridges horse→ground into ONE connected component
+  (largest-component filter keeps it); maxDepth 1.5m too generous; no height clip.
+  PLY confirmed green (grass) verts. FIX: `DepthGridMesh` height clip — world is
+  gravity-aligned (Y up), drop verts > `dropBelowCrest` (0.35 m) below the 98th-pct
+  crest Y (null their vertexIndex pre-triangulation → excluded from mesh+cloud).
+- 3D TRACINGS (spine + sections as green curves on the painted model): plumbed the
+  normalize transform N + a 3D spine polyline out of `ScanProcessor.process`
+  (`ProcessedScan.normalizeTransform`, `.spinePolyline`). `AppModel.worldTracings`
+  maps normalized spine/section points back to capture/world frame via
+  `inverse(yUpToZUp)·inverse(N)` → `PolylineIO` `frames/tracings.bin`
+  (`Exports.tracingsURL`). `PaintedSurface3DView` recenters surface+tracings by the
+  SAME bbox center, draws green `.line` geometry (readsFromDepthBuffer=false → always
+  on top). Purpose: show sections vs. coat marks she draws for bone positions.
+- TODO NEXT: embed the 3D model (with tracings) in PDF page-1 bottom-center, as large
+  as possible w/o overlapping the section fan / topline. Approach TBD (SceneKit
+  offscreen snapshot → CGImage into PDFReportWriter, vs CG oblique projection in
+  ExportKit). Front-camera one-snap still deferred.
+- RETRO-FIX for OLD scans (2026-08-27): grass clip is capture-time, so pre-fix scans
+  keep grass in their SAVED artifacts. `MeshHeightClip` (pure arrays) + `AppModel.
+  migrateHeightClipIfNeeded` (called at top of loadResult): one-time, marker-gated
+  (`frames/.heightclipped`) rewrite of lidar.obj + surface.bin + pointcloud.bin with
+  the same 0.35 m below-crest clip → process/PDF/both viewers all see clean data.
+  Only rewrites files with geometry below the crest. Does NOT re-run largest-
+  component, so grass remnants within 0.35 m of the crest could survive (rare).
+
 ## Ortho viewers + colored PLY export (2026-08-04), NOT device-verified
 - Perceived VERTICAL EXAGGERATION: geometry is isometric (viewers push world coords
   straight to SCNVector3, no per-axis scale; unprojection is metric). Cause = default

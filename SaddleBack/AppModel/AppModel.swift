@@ -288,9 +288,31 @@ final class AppModel {
                     result.exports.paintedPLY = ply
                 }
             }
+            // Spine + section tracings, mapped from the normalized frame back into
+            // the capture/world frame of the painted surface, for overlay.
+            let tracings = framesDir.appendingPathComponent("tracings.bin")
+            if (try? PolylineIO.write(worldTracings(from: result), to: tracings)) != nil {
+                result.exports.tracingsURL = tracings
+            }
         }
         result.exports.reportPDF = generateReportPDF(result, animalID: animalID, scanID: scan.id)
         return result
+    }
+
+    /// Maps the spine polyline + each cross-section (normalized Z-up frame) back to
+    /// the capture/world frame of the painted surface, so they can be overlaid.
+    /// world = yUpToZUp⁻¹ · N⁻¹ · normalized  (N = the pipeline's normalize transform).
+    private func worldTracings(from result: ProcessedScan) -> [[SIMD3<Float>]] {
+        let inv = simd_inverse(Self.yUpToZUp) * simd_inverse(result.normalizeTransform)
+        func toWorld(_ p: SIMD3<Double>) -> SIMD3<Float> {
+            let v = inv * SIMD4<Float>(Float(p.x), Float(p.y), Float(p.z), 1)
+            return SIMD3<Float>(v.x, v.y, v.z)
+        }
+        var lines: [[SIMD3<Float>]] = [result.spinePolyline.map(toWorld)]
+        for section in result.sections where section.points3D.count > 1 {
+            lines.append(section.points3D.map(toWorld))
+        }
+        return lines
     }
 }
 

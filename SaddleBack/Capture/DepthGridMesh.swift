@@ -2,8 +2,7 @@ import Foundation
 import ARKit
 import simd
 import MeshKit
-import CoreImage
-import CoreGraphics
+import CoreVideo
 
 /// Builds a dense surface mesh + point cloud from a SINGLE ARKit LiDAR frame by
 /// unprojecting the scene-depth map and triangulating the pixel grid. This is the
@@ -18,14 +17,12 @@ nonisolated enum DepthGridMesh {
         let photoColors: [SIMD3<Float>] // per-vertex color sampled from the photo
     }
 
-    private static let ciContext = CIContext(options: nil)
-
     /// - Parameters:
     ///   - maxDepth: drop pixels farther than this (m) — trims the background.
     ///   - maxEdgeJump: don't connect a quad whose corner depths span more than
     ///     this (m) — keeps the back from bridging to the ground at its edges.
     static func build(from frame: ARFrame, maxDepth: Float = 1.5,
-                      maxEdgeJump: Float = 0.04) -> Result? {
+                      maxEdgeJump: Float = 0.04, dropBelowCrest: Float = 0.35) -> Result? {
         guard let sceneDepth = frame.sceneDepth else { return nil }
         let depthMap = sceneDepth.depthMap
         let confMap = sceneDepth.confidenceMap
@@ -34,6 +31,13 @@ nonisolated enum DepthGridMesh {
         defer { CVPixelBufferUnlockBaseAddress(depthMap, .readOnly) }
         if let confMap { CVPixelBufferLockBaseAddress(confMap, .readOnly) }
         defer { if let confMap { CVPixelBufferUnlockBaseAddress(confMap, .readOnly) } }
+
+        // The captured photo shares the depth map's orientation (both CVPixelBuffers,
+        // row 0 = top), so we sample it DIRECTLY — no CIImage/CGContext flip, which
+        // is what was mirroring the paint relative to the geometry.
+        let photo = frame.capturedImage
+        CVPixelBufferLockBaseAddress(photo, .readOnly)
+        defer { CVPixelBufferUnlockBaseAddress(photo, .readOnly) }
 
         let w = CVPixelBufferGetWidth(depthMap)
         let h = CVPixelBufferGetHeight(depthMap)
@@ -58,29 +62,32 @@ nonisolated enum DepthGridMesh {
             return confBase.advanced(by: y * confRow).assumingMemoryBound(to: UInt8.self)[x]
         }
 
-        // Render the captured photo to a top-row-first RGBA8 bitmap so each depth
-        // pixel can be colored from the matching image pixel (same camera → aligned).
-        var rgb: [UInt8]?
-        var rgbW = 0, rgbH = 0
-        let ci = CIImage(cvPixelBuffer: frame.capturedImage)
-        if let cg = DepthGridMesh.ciContext.createCGImage(ci, from: ci.extent) {
-            rgbW = cg.width; rgbH = cg.height
-            var buf = [UInt8](repeating: 0, count: rgbW * rgbH * 4)
-            buf.withUnsafeMutableBytes { ptr in
-                if let ctx = CGContext(data: ptr.baseAddress, width: rgbW, height: rgbH, bitsPerComponent: 8,
-                                       bytesPerRow: rgbW * 4, space: CGColorSpaceCreateDeviceRGB(),
-                                       bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
-                    ctx.translateBy(x: 0, y: CGFloat(rgbH)); ctx.scaleBy(x: 1, y: -1)   // row 0 = image top
-                    ctx.draw(cg, in: CGRect(x: 0, y: 0, width: rgbW, height: rgbH))
-                }
-            }
-            rgb = buf
-        }
+        // 420 YCbCr bi-planar accessors for the captured photo (plane 0 = luma,
+        // plane 1 = interleaved Cb/Cr at half resolution).
+        let lumaW = CVPixelBufferGetWidthOfPlane(photo, 0)
+        let lumaH = CVPixelBufferGetHeightOfPlane(photo, 0)
+        let yBase = CVPixelBufferGetBaseAddressOfPlane(photo, 0)
+        let yRow = CVPixelBufferGetBytesPerRowOfPlane(photo, 0)
+        let cBase = CVPixelBufferGetBaseAddressOfPlane(photo, 1)
+        let cRow = CVPixelBufferGetBytesPerRowOfPlane(photo, 1)
+        let videoRange = CVPixelBufferGetPixelFormatType(photo) == kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange
+
         func photoColor(_ x: Int, _ y: Int) -> SIMD3<Float> {
-            guard let rgb, rgbW > 0, rgbH > 0 else { return SIMD3<Float>(0.7, 0.7, 0.7) }
-            let rx = min(x * rgbW / w, rgbW - 1), ry = min(y * rgbH / h, rgbH - 1)
-            let i = (ry * rgbW + rx) * 4
-            return SIMD3<Float>(Float(rgb[i]) / 255, Float(rgb[i + 1]) / 255, Float(rgb[i + 2]) / 255)
+            guard let yBase, let cBase, lumaW > 0, lumaH > 0 else { return SIMD3<Float>(0.7, 0.7, 0.7) }
+            // Depth pixel → luma pixel; both buffers are row-0-top, same orientation.
+            let rx = min(x * lumaW / w, lumaW - 1)
+            let ry = min(y * lumaH / h, lumaH - 1)
+            let yv = Float(yBase.advanced(by: ry * yRow + rx).assumingMemoryBound(to: UInt8.self).pointee)
+            let cx = min(rx / 2, lumaW / 2 - 1), cy = min(ry / 2, lumaH / 2 - 1)
+            let cptr = cBase.advanced(by: cy * cRow + cx * 2).assumingMemoryBound(to: UInt8.self)
+            let cb = Float(cptr[0]) - 128, cr = Float(cptr[1]) - 128
+            // BT.601 YCbCr → RGB (video- or full-range).
+            let yn = videoRange ? (yv - 16) * 1.164 : yv
+            let r = yn + 1.402 * cr
+            let g = yn - 0.344136 * cb - 0.714136 * cr
+            let b = yn + 1.772 * cb
+            func clamp(_ v: Float) -> Float { min(max(v / 255, 0), 1) }
+            return SIMD3<Float>(clamp(r), clamp(g), clamp(b))
         }
 
         // 1. Gather valid depths (0 = invalid): finite, in range, confidence ≥ medium.
@@ -133,6 +140,19 @@ nonisolated enum DepthGridMesh {
             }
         }
         guard positions.count >= 3 else { return nil }
+
+        // 3b. Height clip: the world is gravity-aligned (Y = up), and the back is
+        //     the highest surface in view. Drop everything more than `dropBelowCrest`
+        //     below the crest — that's below the ±8" saddle band but well above the
+        //     ground, so pasture grass (which the barrel-to-ground slope would
+        //     otherwise bridge into one connected mesh) is excluded.
+        let sortedY = positions.map { $0.y }.sorted()
+        let topY = sortedY[Int(Double(sortedY.count - 1) * 0.98)]   // robust crest
+        let cutoffY = topY - dropBelowCrest
+        for p in 0..<vertexIndex.count {
+            let vi = vertexIndex[p]
+            if vi >= 0, positions[Int(vi)].y < cutoffY { vertexIndex[p] = -1 }
+        }
 
         // 4. Triangulate the grid (skip quads spanning a depth discontinuity) while
         //    union-finding connected vertices.
