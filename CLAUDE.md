@@ -455,6 +455,32 @@ XY; spine = max-Z per slice.
   (=0.2032 in ScanProcessor) does the ±8in clip. MeshKit 31/31, ExportKit 9/9.
 - All builds clean (Swift 6). Device redeploy PENDING (Michael does build/deploy).
 
+## Coverage viz + share/reimport (2026-08-28), NOT device-verified
+- 3D viewers: spine + 4" section curves now render as BOLD tubes (green spine,
+  cyan sections) via shared `TracingTubes` (Views/), used by BOTH `PaintedSurface3D‑
+  View` and `PointCloud3DView`. Tubes ignore depth (no read/write) + renderingOrder
+  10 → always on top, no z-fight/flicker. The earlier translucent section PLANES in
+  the point cloud were REMOVED (deleted `SectionPlaneIO`, `Exports.sectionPlanesURL`,
+  `worldSectionPlanes`) — replaced by the curves. Point cloud viewer takes
+  `tracingsURL` now.
+- Charts/PDF: distance is measured FROM THE WITHERS (0) everywhere — ResultView
+  rocker/width/tree-angle + station label subtract `spine.withersArcLength`; slider
+  starts at Section 0 (withers). Added `.chartXAxisLabel`/`.chartYAxisLabel` (were
+  missing). (i) popovers on Width + Tree-angle explain the metrics. PDF sections are
+  colored (golden-angle hue palette) with a top-right legend (swatch · #n · distance
+  from withers), numbering 0-based (#0 = withers), fan spacing bumped ½"→~⅚".
+- SHARE / REIMPORT (Apple Archive, chosen over .zip — native, no dep): `ScanArchive`
+  (Model/) LZFSE-archives/extracts a dir tree (AppleArchive+System). `ScanLibrary.
+  exportScan/exportAll` stage a mirror of the store layout (+manifest.json) →
+  `.saddleback` file in tmp; `importArchive` extracts + MERGES (new animal copied
+  whole; existing animal keeps its info.json, scans merged; scan-id COLLISION →
+  fresh UUID via `reidScan` rewriting metadata.json so nothing clobbers). `AppModel.
+  exportScanArchive/exportAllArchive/importArchive`. UI: AnimalList ▸ ⋯ menu =
+  Import (fileImporter, security-scoped) + Share All; ScanDetail toolbar = Share Scan.
+  Share via `ActivityView` (UIActivityViewController; ShareLink can't take an
+  on-demand URL). Round-trip verified via RunCodeSnippet. Imported scans re-derive
+  results on open (loadResult from lidar.obj/surface.bin).
+
 ## Status
 - 2026-07-30: Project scaffolded. CLAUDE.md added. Decisions: 4 local SPM packages;
   MeshKit-first. Z-up convention adopted.

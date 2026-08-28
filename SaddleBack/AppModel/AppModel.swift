@@ -118,6 +118,34 @@ final class AppModel {
         catch { errorMessage = "Couldn't delete scan: \(error.localizedDescription)" }
     }
 
+    // MARK: - Share / import
+
+    /// Builds a shareable archive of one scan; returns its URL (in a temp dir).
+    func exportScanArchive(animalID: UUID, scanID: UUID) async -> URL? {
+        do { return try await library.exportScan(animalID: animalID, scanID: scanID) }
+        catch { errorMessage = "Couldn't build scan archive: \(error.localizedDescription)"; return nil }
+    }
+
+    /// Builds a shareable archive of the whole animal store; returns its URL.
+    func exportAllArchive() async -> URL? {
+        do { return try await library.exportAll() }
+        catch { errorMessage = "Couldn't build archive: \(error.localizedDescription)"; return nil }
+    }
+
+    /// Imports scans from an archive and reloads the roster. Returns how many scans
+    /// were imported.
+    @discardableResult
+    func importArchive(from url: URL) async -> Int {
+        do {
+            let count = try await library.importArchive(from: url)
+            await loadAnimals()
+            return count
+        } catch {
+            errorMessage = "Couldn't import archive: \(error.localizedDescription)"
+            return 0
+        }
+    }
+
     /// Generates the single-page cross-section PDF for a processed scan and
     /// returns its URL. Uses the current unit + page-size settings.
     private func generateReportPDF(_ result: ProcessedScan, animalID: UUID, scanID: UUID) -> URL? {

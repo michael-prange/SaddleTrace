@@ -106,7 +106,8 @@ public enum PDFReportWriter {
 
         let maxSectionDepth = sections.map { extentV($0.points2D) }.max() ?? 0.001
 
-        let targetFan: CGFloat = 36   // 1/2-inch target vertical spacing
+        let targetFan: CGFloat = 60   // ~5/6-inch target vertical spacing (roomy so
+                                      // the colored sections are easy to tell apart)
         let titleSpace: CGFloat = 66
         let scaleBarSpace: CGFloat = 56
         let usableHeight = pageHeight - 2 * margin - titleSpace - scaleBarSpace
@@ -134,20 +135,24 @@ public enum PDFReportWriter {
                 let pt = CGPoint(x: centerX + CGFloat(p.x) * ppm, y: apexY + CGFloat(p.y) * ppm)
                 if j == 0 { path.move(to: pt) } else { path.addLine(to: pt) }
             }
-            stroke(path, in: ctx, width: 1.1, gray: 0.1)
+            strokeColored(path, in: ctx, width: 1.6, color: sectionColor(i))
 
             let minU = pts.map(\.x).min()!, maxU = pts.map(\.x).max()!
             let leftX = centerX + CGFloat(minU) * ppm
             let rightX = centerX + CGFloat(maxU) * ppm
             if i == 0 {
                 // Withers: title above the apex, L/R at the ends.
-                drawText("Withers #1", at: CGPoint(x: centerX - 26, y: apexY + 6), size: 10, bold: true, in: ctx)
+                drawText("Withers #0", at: CGPoint(x: centerX - 26, y: apexY + 6), size: 10, bold: true, in: ctx)
                 drawText("L", at: CGPoint(x: leftX - 14, y: apexY - 4), size: 10, bold: true, in: ctx)
                 drawText("R", at: CGPoint(x: rightX + 6, y: apexY - 4), size: 10, bold: true, in: ctx)
             } else {
-                drawText("#\(i + 1)", at: CGPoint(x: rightX + 8, y: apexY - 4), size: 10, in: ctx)
+                drawText("#\(i)", at: CGPoint(x: rightX + 8, y: apexY - 4), size: 10, in: ctx)
             }
         }
+
+        // Legend (top-right): section number, distance from the withers, and the
+        // matching curve color.
+        drawLegend(in: ctx, page: page, sections: sections, imperial: imperial)
 
         // Topline in the lower band — the first page-width of arc at the shared
         // scale. The z→y mapping and ppm match page 2, so placing page 2 to the
@@ -293,6 +298,79 @@ public enum PDFReportWriter {
     private static func scaleString(_ scale: CGFloat) -> String {
         let inv = (1 / scale).rounded()
         return String(Int(inv))
+    }
+
+    /// A well-separated color per section index. Hues step by the golden angle so
+    /// adjacent sections (adjacent in the fan) land far apart on the color wheel,
+    /// maximizing differentiability; brightness alternates to further separate them.
+    private static func sectionColor(_ i: Int) -> CGColor {
+        let hue = (Double(i) * 0.61803398875).truncatingRemainder(dividingBy: 1.0)
+        let brightness = i.isMultiple(of: 2) ? 0.82 : 0.62
+        return hsbColor(hue, 0.95, brightness)
+    }
+
+    /// HSB → RGB `CGColor` (device RGB), avoiding platform UIColor/NSColor.
+    private static func hsbColor(_ h: Double, _ s: Double, _ v: Double) -> CGColor {
+        let i = Int(h * 6), f = h * 6 - Double(Int(h * 6))
+        let p = v * (1 - s), q = v * (1 - f * s), t = v * (1 - (1 - f) * s)
+        let (r, g, b): (Double, Double, Double)
+        switch ((i % 6) + 6) % 6 {
+        case 0: (r, g, b) = (v, t, p)
+        case 1: (r, g, b) = (q, v, p)
+        case 2: (r, g, b) = (p, v, t)
+        case 3: (r, g, b) = (p, q, v)
+        case 4: (r, g, b) = (t, p, v)
+        default: (r, g, b) = (v, p, q)
+        }
+        return CGColor(red: r, green: g, blue: b, alpha: 1)
+    }
+
+    /// Draws the legend box in the top-right corner: one row per section with a
+    /// color swatch, the section number, and its distance from the withers.
+    private static func drawLegend(in ctx: CGContext, page: CGSize, sections: [CrossSection], imperial: Bool) {
+        guard !sections.isEmpty else { return }
+        let withersArc = sections.first { $0.stationIndex == 0 }?.arcLength
+            ?? sections.map(\.arcLength).min() ?? 0
+
+        let rowH: CGFloat = 14, pad: CGFloat = 8, titleH: CGFloat = 16, boxW: CGFloat = 172
+        let boxH = pad * 2 + titleH + rowH * CGFloat(sections.count)
+        let right = page.width - margin
+        let topY = page.height - margin - 4
+        let box = CGRect(x: right - boxW, y: topY - boxH, width: boxW, height: boxH)
+
+        ctx.saveGState()
+        ctx.setFillColor(CGColor(gray: 1, alpha: 0.92))
+        ctx.setStrokeColor(CGColor(gray: 0.35, alpha: 1))
+        ctx.setLineWidth(0.8)
+        ctx.addRect(box); ctx.drawPath(using: .fillStroke)
+        ctx.restoreGState()
+
+        drawText("Sections (from withers)", at: CGPoint(x: box.minX + pad, y: box.maxY - titleH),
+                 size: 10, bold: true, in: ctx)
+
+        for (i, section) in sections.enumerated() {
+            let y = box.maxY - titleH - pad - CGFloat(i) * rowH
+            let swatch = CGMutablePath()
+            swatch.move(to: CGPoint(x: box.minX + pad, y: y + 4))
+            swatch.addLine(to: CGPoint(x: box.minX + pad + 22, y: y + 4))
+            strokeColored(swatch, in: ctx, width: 2.6, color: sectionColor(i))
+
+            let dist = abs(section.arcLength - withersArc)
+            let distStr = imperial ? String(format: "%.1f in", dist / 0.0254)
+                                   : String(format: "%.1f cm", dist * 100)
+            let label = i == 0 ? "#0  Withers" : "#\(i)   \(distStr)"
+            drawText(label, at: CGPoint(x: box.minX + pad + 30, y: y), size: 9, in: ctx)
+        }
+    }
+
+    private static func strokeColored(_ path: CGPath, in ctx: CGContext, width: CGFloat, color: CGColor) {
+        ctx.saveGState()
+        ctx.setStrokeColor(color)
+        ctx.setLineWidth(width)
+        ctx.setLineJoin(.round)
+        ctx.addPath(path)
+        ctx.strokePath()
+        ctx.restoreGState()
     }
 
     private static func stroke(_ path: CGPath, in ctx: CGContext, width: CGFloat, gray: CGFloat) {

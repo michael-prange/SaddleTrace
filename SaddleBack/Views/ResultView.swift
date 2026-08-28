@@ -15,6 +15,10 @@ struct ResultView: View {
 
     private var system: MeasurementSystem { MeasurementSystem(rawValue: systemRaw) ?? .metric }
 
+    /// Spine arc length of the withers (station 0). All "distance along the back"
+    /// values are shown relative to this, so the withers reads 0.
+    private var withersArc: Double { result.spine.withersArcLength }
+
     var body: some View {
         List {
             summarySection
@@ -33,15 +37,12 @@ struct ResultView: View {
         }
         .sheet(isPresented: $showingCloud) {
             if let url = result.exports.pointCloudURL {
-                PointCloud3DView(url: url)
+                PointCloud3DView(url: url, tracingsURL: result.exports.tracingsURL)
             }
         }
         .onAppear {
-            // Start on the first reliable (well-formed) station rather than the
-            // partial section at the front cutoff.
-            if stationIndex == 0, let first = result.metrics.firstIndex(where: \.isReliable) {
-                stationIndex = first
-            }
+            // Start at the withers (Section 0).
+            stationIndex = 0
         }
     }
 
@@ -72,7 +73,7 @@ struct ResultView: View {
                 .padding(.vertical, 4)
 
             VStack(alignment: .leading) {
-                Text("Station \(section.stationIndex) · \(system.lengthString(section.arcLength)) along the back")
+                Text("Section \(section.stationIndex) · \(system.lengthString(abs(section.arcLength - withersArc))) from withers")
                     .font(.caption).foregroundStyle(.secondary)
                 Slider(
                     value: Binding(
@@ -88,34 +89,56 @@ struct ResultView: View {
 
     // MARK: Charts
 
-    private var alongLabel: String { "Along back (\(system.lengthUnit))" }
+    private var alongLabel: String { "From withers (\(system.lengthUnit))" }
 
     private var rockerSection: some View {
         Section("Topline (rocker)") {
             Chart(rockerPoints) { p in
                 LineMark(x: .value(alongLabel, p.arc), y: .value("Height (\(system.lengthUnit))", p.value))
             }
+            .chartXAxisLabel(alongLabel)
+            .chartYAxisLabel("Height (\(system.lengthUnit))")
             .frame(height: 160)
         }
     }
 
     private var widthSection: some View {
-        Section("Width at spine level") {
+        Section {
             Chart(widthPoints) { p in
                 LineMark(x: .value(alongLabel, p.arc), y: .value("Width (\(system.lengthUnit))", p.value))
             }
+            .chartXAxisLabel(alongLabel)
+            .chartYAxisLabel("Width (\(system.lengthUnit))")
             .frame(height: 160)
+        } header: {
+            HStack {
+                Text("Width at spine level")
+                Spacer()
+                MetricInfoButton(
+                    title: "Width at spine level",
+                    message: "For each cross-section, the horizontal distance from the left side of the back to the right side, measured along the horizontal line that passes through the spine (the red dot). In other words, how wide the back is at the height of the spine. The horizontal axis is distance from the withers (0), stepping toward the tail.")
+            }
         }
     }
 
     private var treeAngleSection: some View {
-        Section("Tree angles") {
+        Section {
             Chart(treeAnglePoints) { p in
                 LineMark(x: .value(alongLabel, p.arc), y: .value("Angle (°)", p.value))
                     .foregroundStyle(by: .value("Side", p.series))
             }
             .chartForegroundStyleScale(["Left": Color.blue, "Right": Color.orange])
+            .chartXAxisLabel(alongLabel)
+            .chartYAxisLabel("Angle (°)")
             .frame(height: 160)
+        } header: {
+            HStack {
+                Text("Tree angles")
+                Spacer()
+                MetricInfoButton(
+                    title: "Tree angles",
+                    message: "The slope of the back's surface just off the spine — measured 5 cm out on each side and reported as degrees below horizontal. This is the angle a saddle tree's panels must match. Left and right are measured separately. Distance along the back is measured from the withers (0).")
+            }
         }
     }
 
@@ -160,26 +183,53 @@ struct ResultView: View {
     }
 
     private var rockerPoints: [ProfilePoint] {
-        result.rocker.map { ProfilePoint(arc: system.length($0.x), value: system.length($0.y)) }
+        result.rocker.map { ProfilePoint(arc: system.length(abs($0.x - withersArc)), value: system.length($0.y)) }
     }
 
     private var widthPoints: [ProfilePoint] {
         result.metrics
             .filter { $0.isReliable }
-            .map { ProfilePoint(arc: system.length($0.arcLength), value: system.length($0.widthAtSpineLevel)) }
+            .map { ProfilePoint(arc: system.length(abs($0.arcLength - withersArc)), value: system.length($0.widthAtSpineLevel)) }
     }
 
     private var treeAnglePoints: [ProfilePoint] {
         var out: [ProfilePoint] = []
         for m in result.metrics {
+            let arc = system.length(abs(m.arcLength - withersArc))
             if m.angleLeftDegrees.isFinite {
-                out.append(ProfilePoint(arc: system.length(m.arcLength), value: m.angleLeftDegrees, series: "Left"))
+                out.append(ProfilePoint(arc: arc, value: m.angleLeftDegrees, series: "Left"))
             }
             if m.angleRightDegrees.isFinite {
-                out.append(ProfilePoint(arc: system.length(m.arcLength), value: m.angleRightDegrees, series: "Right"))
+                out.append(ProfilePoint(arc: arc, value: m.angleRightDegrees, series: "Right"))
             }
         }
         return out
+    }
+}
+
+/// A small info button that reveals a short explanation in a popover. Used on the
+/// Width and Tree-angle plots to explain how those metrics are measured.
+private struct MetricInfoButton: View {
+    let title: String
+    let message: String
+    @State private var showing = false
+
+    var body: some View {
+        Button { showing = true } label: {
+            Image(systemName: "info.circle")
+        }
+        .buttonStyle(.borderless)
+        .popover(isPresented: $showing) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text(title).font(.headline)
+                Text(message)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding()
+            .frame(width: 280)
+            .presentationCompactAdaptation(.popover)
+        }
     }
 }
 

@@ -10,6 +10,8 @@ struct ScanDetailView: View {
     @State private var isProcessing = false
     @State private var isLoading = false
     @State private var result: ProcessedScan?
+    @State private var shareItem: ShareItem?
+    @State private var isBuilding = false
 
     var body: some View {
         Group {
@@ -34,7 +36,34 @@ struct ScanDetailView: View {
         }
         .navigationTitle("Scan")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Button { shareScan() } label: {
+                    Label("Share Scan", systemImage: "square.and.arrow.up")
+                }
+                .disabled(isBuilding)
+            }
+        }
+        .sheet(item: $shareItem) { item in
+            ActivityView(items: [item.url])
+        }
+        .overlay {
+            if isBuilding {
+                ProgressView("Preparing…")
+                    .padding(24)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
         .task { await loadIfComplete() }
+    }
+
+    private func shareScan() {
+        isBuilding = true
+        Task {
+            let url = await appModel.exportScanArchive(animalID: animal.id, scanID: scan.id)
+            isBuilding = false
+            if let url { shareItem = ShareItem(url: url) }
+        }
     }
 
     /// When opening an already-completed scan, reload its results (fast MeshKit

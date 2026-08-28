@@ -64,10 +64,10 @@ private struct PaintedSurfaceSCNView: UIViewRepresentable {
             scene.rootNode.addChildNode(SCNNode(geometry: geometry))
 
             // Spine + section tracings (same world frame), recentered identically and
-            // drawn as green lines that always render on top of the surface.
-            if let tracingsURL, let lines = try? PolylineIO.read(tracingsURL),
-               let traceGeometry = Self.lineGeometry(lines, center: center) {
-                scene.rootNode.addChildNode(SCNNode(geometry: traceGeometry))
+            // drawn as bold tubes that always render on top of the surface.
+            for node in TracingTubes.nodes(tracingsURL: tracingsURL, center: center,
+                                           modelExtent: simd_length(hi - lo)) {
+                scene.rootNode.addChildNode(node)
             }
 
             let radius = simd_length(hi - lo) / 2
@@ -87,29 +87,6 @@ private struct PaintedSurfaceSCNView: UIViewRepresentable {
 
         view.scene = scene
         return view
-    }
-
-    /// Builds a single green line geometry from polylines, recentered by `center`.
-    private static func lineGeometry(_ lines: [[SIMD3<Float>]], center: SIMD3<Float>) -> SCNGeometry? {
-        var verts: [SCNVector3] = []
-        var idx: [UInt32] = []
-        for line in lines where line.count >= 2 {
-            let base = UInt32(verts.count)
-            for p in line { let q = p - center; verts.append(SCNVector3(q.x, q.y, q.z)) }
-            for k in 0..<(line.count - 1) { idx.append(base + UInt32(k)); idx.append(base + UInt32(k + 1)) }
-        }
-        guard !idx.isEmpty else { return nil }
-        let source = SCNGeometrySource(vertices: verts)
-        let element = SCNGeometryElement(indices: idx, primitiveType: .line)
-        let geometry = SCNGeometry(sources: [source], elements: [element])
-        let material = SCNMaterial()
-        material.lightingModel = .constant
-        material.diffuse.contents = UIColor(red: 0.1, green: 1.0, blue: 0.2, alpha: 1)
-        material.emission.contents = UIColor(red: 0.1, green: 1.0, blue: 0.2, alpha: 1)
-        material.readsFromDepthBuffer = false   // always draw over the surface
-        material.isDoubleSided = true
-        geometry.firstMaterial = material
-        return geometry
     }
 
     func updateUIView(_ uiView: SCNView, context: Context) {}

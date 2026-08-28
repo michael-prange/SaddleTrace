@@ -159,6 +159,169 @@ actor ScanLibrary {
     /// entry point for readers like the result loader.
     func materialize(_ url: URL) { ensureDownloaded(url) }
 
+    // MARK: - Share / import (Apple Archive)
+
+    enum ImportError: Error { case invalidArchive }
+
+    /// Manifest written at the archive root so an import can recognize + version it.
+    private struct ArchiveManifest: Codable, Sendable { var version: Int; var kind: String; var created: Date }
+
+    /// Archives a single scan (plus its animal's `info.json`) into a shareable
+    /// `.saddleback` file in a temp directory; returns its URL for the caller to
+    /// share. The recipient reimports it with `importArchive(from:)`.
+    func exportScan(animalID: UUID, scanID: UUID) throws -> URL {
+        let staging = try makeStaging()
+        defer { try? FileManager.default.removeItem(at: staging) }
+        let fm = FileManager.default
+
+        let animalStage = staging.appendingPathComponent("animals/\(animalID.uuidString)", isDirectory: true)
+        try ensureDirectory(animalStage.appendingPathComponent("scans", isDirectory: true))
+
+        let info = infoURL(animalID)
+        ensureDownloaded(info)
+        try? fm.copyItem(at: info, to: animalStage.appendingPathComponent("info.json"))
+
+        let src = scanDirectory(animalID, scanID)
+        downloadTree(src)
+        try fm.copyItem(at: src, to: animalStage.appendingPathComponent("scans/\(scanID.uuidString)", isDirectory: true))
+
+        try writeManifest(kind: "scan", to: staging)
+        return try makeArchive(from: staging, named: archiveName(animalID: animalID))
+    }
+
+    /// Archives the whole animal store into a shareable `.saddleback` file; returns
+    /// its URL. The recipient reimports it with `importArchive(from:)`.
+    func exportAll() throws -> URL {
+        let staging = try makeStaging()
+        defer { try? FileManager.default.removeItem(at: staging) }
+
+        try ensureDirectory(root)
+        downloadTree(root)
+        try FileManager.default.copyItem(at: root, to: staging.appendingPathComponent("animals", isDirectory: true))
+
+        try writeManifest(kind: "library", to: staging)
+        return try makeArchive(from: staging, named: "SaddleBack-AllScans-\(dateStamp())")
+    }
+
+    /// Imports an archive produced by `exportScan`/`exportAll`, merging its animals
+    /// and scans into the store. New animals/scans are copied in; a scan whose id
+    /// already exists is given a fresh id so nothing is overwritten. Returns the
+    /// number of scans imported.
+    @discardableResult
+    func importArchive(from url: URL) throws -> Int {
+        let extracted = try makeStaging()
+        defer { try? FileManager.default.removeItem(at: extracted) }
+        try ScanArchive.extract(url, to: extracted)
+
+        let fm = FileManager.default
+        let animalsDir = extracted.appendingPathComponent("animals", isDirectory: true)
+        guard fm.fileExists(atPath: animalsDir.path) else { throw ImportError.invalidArchive }
+        try ensureDirectory(root)
+
+        var imported = 0
+        let animalDirs = (try? fm.contentsOfDirectory(
+            at: animalsDir, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles])) ?? []
+        for aDir in animalDirs {
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: aDir.path, isDirectory: &isDir), isDir.boolValue else { continue }
+            let targetAnimal = root.appendingPathComponent(aDir.lastPathComponent, isDirectory: true)
+
+            if !fm.fileExists(atPath: targetAnimal.path) {
+                try fm.copyItem(at: aDir, to: targetAnimal)
+                imported += scanCount(in: targetAnimal)
+                continue
+            }
+            // Existing animal: merge scans, keeping the local info.json (name).
+            let srcScans = aDir.appendingPathComponent("scans", isDirectory: true)
+            let dstScans = targetAnimal.appendingPathComponent("scans", isDirectory: true)
+            try ensureDirectory(dstScans)
+            let scanDirs = (try? fm.contentsOfDirectory(
+                at: srcScans, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles])) ?? []
+            for sDir in scanDirs {
+                let existing = dstScans.appendingPathComponent(sDir.lastPathComponent, isDirectory: true)
+                if fm.fileExists(atPath: existing.path) {
+                    let newID = UUID()
+                    let target = dstScans.appendingPathComponent(newID.uuidString, isDirectory: true)
+                    try fm.copyItem(at: sDir, to: target)
+                    reidScan(at: target, newID: newID)
+                } else {
+                    try fm.copyItem(at: sDir, to: existing)
+                }
+                imported += 1
+            }
+        }
+        return imported
+    }
+
+    // MARK: - Archive internals
+
+    private func makeStaging() throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sb-archive-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private func makeArchive(from staging: URL, named name: String) throws -> URL {
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("\(name).saddleback")
+        try? FileManager.default.removeItem(at: out)
+        try ScanArchive.archive(contentsOf: staging, to: out)
+        return out
+    }
+
+    private func writeManifest(kind: String, to staging: URL) throws {
+        let manifest = ArchiveManifest(version: 1, kind: kind, created: .now)
+        try Self.encoder.encode(manifest).write(
+            to: staging.appendingPathComponent("manifest.json"), options: .atomic)
+    }
+
+    /// Rewrites a copied-in scan's `metadata.json` to carry a fresh id (used on id
+    /// collision during import so the existing scan isn't clobbered).
+    private func reidScan(at dir: URL, newID: UUID) {
+        let meta = dir.appendingPathComponent("metadata.json")
+        guard let data = try? Data(contentsOf: meta),
+              let s = try? Self.decoder.decode(ScanRecord.self, from: data) else { return }
+        let updated = ScanRecord(
+            id: newID, timestamp: s.timestamp, captureMode: s.captureMode, detail: s.detail,
+            status: s.status, deviceModel: s.deviceModel, osVersion: s.osVersion,
+            stationSpacingMeters: s.stationSpacingMeters, processingSeconds: s.processingSeconds)
+        try? Self.encoder.encode(updated).write(to: meta, options: .atomic)
+    }
+
+    private func scanCount(in animalDir: URL) -> Int {
+        let scans = animalDir.appendingPathComponent("scans", isDirectory: true)
+        return (try? FileManager.default.contentsOfDirectory(
+            at: scans, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]))?.count ?? 0
+    }
+
+    /// A shareable file name from the animal's name + a timestamp.
+    private func archiveName(animalID: UUID) -> String {
+        let info = infoURL(animalID)
+        ensureDownloaded(info)
+        var base = "Scan"
+        if let data = try? Data(contentsOf: info),
+           let animal = try? Self.decoder.decode(AnimalRecord.self, from: data) {
+            base = animal.name
+        }
+        let safe = base.components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }.joined(separator: "-")
+        return "\(safe.isEmpty ? "Scan" : safe)-\(dateStamp())"
+    }
+
+    private func dateStamp() -> String {
+        let f = DateFormatter()
+        f.dateFormat = "yyyyMMdd-HHmmss"
+        return f.string(from: .now)
+    }
+
+    /// Best-effort recursive iCloud download so evicted files are present before
+    /// archiving. No-op for local (non-iCloud) stores.
+    private func downloadTree(_ url: URL) {
+        ensureDownloaded(url)
+        guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) else { return }
+        for case let file as URL in e { ensureDownloaded(file) }
+    }
+
     // MARK: - Internals
 
     private func ensureDirectory(_ url: URL) throws {

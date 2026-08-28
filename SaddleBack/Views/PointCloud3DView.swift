@@ -4,15 +4,18 @@ import simd
 
 /// Interactive viewer for a scan's captured LiDAR point cloud (coverage-colored:
 /// red → yellow → green). Diagnostic: shows the raw capture and which parts the
-/// mesh crop keeps (green). Rotate (drag), zoom (pinch), pan (two fingers).
+/// mesh crop keeps (green). The spine + 4-inch cross-section curves are overlaid
+/// (same as the 3D model) so the fitter can see whether the back is covered.
+/// Rotate (drag), zoom (pinch), pan (two fingers).
 struct PointCloud3DView: View {
     let url: URL
+    var tracingsURL: URL?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         let cloud = (try? PointCloudIO.read(url)) ?? (points: [], colors: [])
         NavigationStack {
-            StaticPointCloudView(points: cloud.points, colors: cloud.colors)
+            StaticPointCloudView(points: cloud.points, colors: cloud.colors, tracingsURL: tracingsURL)
                 .ignoresSafeArea(edges: .bottom)
                 .navigationTitle("Point Cloud")
                 .navigationBarTitleDisplayMode(.inline)
@@ -26,10 +29,12 @@ struct PointCloud3DView: View {
 }
 
 /// Renders a static, orbitable point cloud from in-memory points + colors. Shared
-/// by the post-processing viewer and the capture review.
+/// by the post-processing viewer and the capture review. Optionally overlays the
+/// spine + cross-section tracing curves.
 struct StaticPointCloudView: UIViewRepresentable {
     let points: [SIMD3<Float>]
     let colors: [SIMD3<Float>]
+    var tracingsURL: URL?
 
     func makeUIView(context: Context) -> SCNView {
         let view = SCNView()
@@ -52,6 +57,14 @@ struct StaticPointCloudView: UIViewRepresentable {
 
             var lo = centered[0], hi = centered[0]
             for p in centered { lo = simd_min(lo, p); hi = simd_max(hi, p) }
+
+            // Spine + cross-section curves in the same world frame, recentered
+            // identically and drawn as bold tubes always on top of the cloud.
+            for node in TracingTubes.nodes(tracingsURL: tracingsURL, center: center,
+                                           modelExtent: simd_length(hi - lo)) {
+                scene.rootNode.addChildNode(node)
+            }
+
             let radius = simd_length(hi - lo) / 2
             let dist = max(radius, 0.05) * 2.2
             let camera = SCNCamera()
