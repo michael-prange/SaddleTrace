@@ -147,8 +147,9 @@ struct CrossSectionTests {
         #expect(abs(m.angleRightDegrees - 10.3) < 3)
         #expect(abs(m.angleLeftDegrees - 10.3) < 3)
         #expect(abs(m.angleLeftDegrees - m.angleRightDegrees) < 1.5)
-        // Width at spine level is ~0 (spine sits at the section's apex).
-        #expect(m.widthAtSpineLevel < 0.05)
+        // Width 5 cm below the apex of a 0.28 m-radius circle:
+        // 2·√(0.28² − 0.23²) ≈ 0.319 m.
+        #expect(abs(m.widthBelowSpine - 0.319) < 0.03)
         // Curvature is finite and non-negative.
         #expect(m.curvatureAlongSpine >= 0 && m.curvatureAlongSpine.isFinite)
         // A full closed section is reliable.

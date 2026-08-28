@@ -36,7 +36,7 @@ struct ExportTextTests {
         let csv = CSVWriter.metricsCSV(metrics)
         let lines = csv.split(separator: "\n")
 
-        #expect(lines.first == "station_index,arc_length_cm,width_cm,angle_left_deg,angle_right_deg,symmetry_rms_mm,reliable")
+        #expect(lines.first == "station_index,arc_length_cm,width_below_spine_cm,angle_left_deg,angle_right_deg,symmetry_rms_mm,reliable")
         #expect(lines.count == metrics.count + 1)
 
         // First data row: arc_length_cm ≈ metres×100 of the first station.

@@ -48,7 +48,8 @@ public enum PDFReportWriter {
 
     public static func pdfData(animalName: String, dateText: String,
                                sections: [CrossSection], rocker: [SIMD2<Double>],
-                               imperial: Bool, pageSize: PDFPageSize = .letter) -> Data {
+                               imperial: Bool, pageSize: PDFPageSize = .letter,
+                               modelImage: CGImage? = nil) -> Data {
         let ordered = sections.sorted { $0.stationIndex < $1.stationIndex }
         let page = pageSize.landscapeSize
         let pdf = NSMutableData()
@@ -69,7 +70,8 @@ public enum PDFReportWriter {
         // Page 1: cross-sections + the front run of the topline, at the shared scale.
         ctx.beginPDFPage(nil)
         drawSectionsPage(in: ctx, page: page, animalName: animalName, dateText: dateText,
-                         sections: ordered, rocker: rocker, imperial: imperial, ppm: ppm, scale: scale)
+                         sections: ordered, rocker: rocker, imperial: imperial, ppm: ppm, scale: scale,
+                         modelImage: modelImage)
         ctx.endPDFPage()
 
         // Page 2: the topline continued at the same scale; placed to the right of
@@ -85,9 +87,11 @@ public enum PDFReportWriter {
 
     public static func write(animalName: String, dateText: String,
                              sections: [CrossSection], rocker: [SIMD2<Double>],
-                             imperial: Bool, pageSize: PDFPageSize = .letter, to url: URL) throws {
+                             imperial: Bool, pageSize: PDFPageSize = .letter,
+                             modelImage: CGImage? = nil, to url: URL) throws {
         try pdfData(animalName: animalName, dateText: dateText,
-                    sections: sections, rocker: rocker, imperial: imperial, pageSize: pageSize)
+                    sections: sections, rocker: rocker, imperial: imperial, pageSize: pageSize,
+                    modelImage: modelImage)
             .write(to: url, options: .atomic)
     }
 
@@ -99,7 +103,7 @@ public enum PDFReportWriter {
     private static func drawSectionsPage(in ctx: CGContext, page: CGSize, animalName: String,
                                          dateText: String, sections: [CrossSection],
                                          rocker: [SIMD2<Double>], imperial: Bool,
-                                         ppm: CGFloat, scale: CGFloat) {
+                                         ppm: CGFloat, scale: CGFloat, modelImage: CGImage?) {
         let pageWidth = page.width, pageHeight = page.height
         let contentLeft = sideMargin
         let contentWidth = pageWidth - 2 * sideMargin
@@ -161,6 +165,61 @@ public enum PDFReportWriter {
             drawToplineSegment(in: ctx, rocker: rocker, split: split, ppm: ppm,
                                arcLo: split.minArc, arcHi: split.page1End, originArc: split.minArc,
                                markWithers: true)
+        }
+
+        // 3D model snapshot in the whitespace beneath the CENTER of the section fan.
+        // Directly under the spine the sections are just their apexes; the arcs only
+        // dip low out at the sides — so the clear area is a funnel that's tall at the
+        // center and narrows nothing / widens lower. We fit the largest centered
+        // rectangle of the image's aspect under that funnel and above the topline.
+        if let modelImage {
+            // Lower envelope of the drawn sections, per x-column (min y = lowest curve).
+            let cols = 240
+            var envelope = [CGFloat](repeating: .greatestFiniteMagnitude, count: cols)
+            for (i, section) in sections.enumerated() {
+                let apexY = stackTop - CGFloat(i) * fanOffset
+                for p in section.points2D {
+                    let x = centerX + CGFloat(p.x) * ppm
+                    let col = Int((x - contentLeft) / contentWidth * CGFloat(cols))
+                    if col >= 0 && col < cols {
+                        envelope[col] = min(envelope[col], apexY + CGFloat(p.y) * ppm)
+                    }
+                }
+            }
+            // Ceiling (lowest section curve) over a centered band of the given half-width.
+            func ceiling(halfWidth: CGFloat) -> CGFloat {
+                let lo = centerX - halfWidth, hi = centerX + halfWidth
+                var m = CGFloat.greatestFiniteMagnitude
+                for col in 0..<cols {
+                    let x = contentLeft + (CGFloat(col) + 0.5) / CGFloat(cols) * contentWidth
+                    if x >= lo && x <= hi { m = min(m, envelope[col]) }
+                }
+                return m
+            }
+
+            var floorY = toplineBaseline
+            if let split = toplineSplit(rocker, pageWidth: pageWidth, ppm: ppm) {
+                let zmax = rocker.map(\.y).max() ?? split.zmin
+                floorY = toplineBaseline + CGFloat(zmax - split.zmin) * ppm
+            }
+            floorY += 18   // clearance above the topline
+
+            let aspect = CGFloat(modelImage.width) / CGFloat(modelImage.height)
+            let maxHalfWidth = contentWidth / 2
+            // Largest-first search for a height whose centered box clears the funnel.
+            var placed: CGRect?
+            var h = stackTop - floorY
+            while h >= 40 {
+                let halfWidth = min(aspect * h / 2, maxHalfWidth)
+                let boxH = min(h, 2 * halfWidth / aspect)   // if width-capped, keep aspect
+                let top = ceiling(halfWidth: halfWidth)
+                if top.isFinite, top - floorY >= boxH {
+                    placed = CGRect(x: centerX - halfWidth, y: top - boxH, width: 2 * halfWidth, height: boxH)
+                    break
+                }
+                h -= 3
+            }
+            if let placed { drawImage(modelImage, in: placed, in: ctx) }
         }
 
         drawScaleBars(in: ctx, ppm: ppm, imperial: imperial, originX: contentLeft, originY: margin + 12)
@@ -381,6 +440,12 @@ public enum PDFReportWriter {
         ctx.addPath(path)
         ctx.strokePath()
         ctx.restoreGState()
+    }
+
+    /// Draws a CGImage in the y-up PDF context. A `UIImage.cgImage` draws upright
+    /// here with no flip (verified).
+    private static func drawImage(_ image: CGImage, in rect: CGRect, in ctx: CGContext) {
+        ctx.draw(image, in: rect)
     }
 
     private static func dot(at p: CGPoint, in ctx: CGContext) {

@@ -112,11 +112,11 @@ struct ResultView: View {
             .frame(height: 160)
         } header: {
             HStack {
-                Text("Width at spine level")
+                Text("Width below spine")
                 Spacer()
                 MetricInfoButton(
-                    title: "Width at spine level",
-                    message: "For each cross-section, the horizontal distance from the left side of the back to the right side, measured along the horizontal line that passes through the spine (the red dot). In other words, how wide the back is at the height of the spine. The horizontal axis is distance from the withers (0), stepping toward the tail.")
+                    title: "Width below spine",
+                    message: "For each cross-section, how wide the back is 5 cm (about 2 in) below the top of the spine — the left-to-right distance across the section at that height. (At spine level itself the section is just its peak, so the width there is ~0; measuring a little lower gives a meaningful width.) The horizontal axis is distance from the withers (0), stepping toward the tail.")
             }
         }
     }
@@ -189,7 +189,7 @@ struct ResultView: View {
     private var widthPoints: [ProfilePoint] {
         result.metrics
             .filter { $0.isReliable }
-            .map { ProfilePoint(arc: system.length(abs($0.arcLength - withersArc)), value: system.length($0.widthAtSpineLevel)) }
+            .map { ProfilePoint(arc: system.length(abs($0.arcLength - withersArc)), value: system.length($0.widthBelowSpine)) }
     }
 
     private var treeAnglePoints: [ProfilePoint] {

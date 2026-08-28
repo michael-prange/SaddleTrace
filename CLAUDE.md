@@ -469,6 +469,16 @@ XY; spine = max-Z per slice.
   missing). (i) popovers on Width + Tree-angle explain the metrics. PDF sections are
   colored (golden-angle hue palette) with a top-right legend (swatch · #n · distance
   from withers), numbering 0-based (#0 = withers), fan spacing bumped ½"→~⅚".
+- PDF now EMBEDS the painted 3D model (with tracings) in the whitespace beneath the
+  section-fan center: `Model3DSnapshot` (Views/) renders `PaintedScene` (shared
+  builder factored out of `PaintedSurface3DView`) offscreen via `SCNRenderer` →
+  CGImage → `PDFReportWriter` (new `modelImage:` param). Placement fits the LARGEST
+  centered box of the image's aspect under the sections' lower ENVELOPE (a funnel:
+  clear under the spine centerline, arcs only dip at the sides) and above the topline
+  peak. `drawImage` uses `ctx.draw` with NO flip (UIImage.cgImage draws upright in
+  the y-up PDF ctx — verified). NOTE: the synthetic tube fixture is CLOSED loops so
+  the funnel ceiling is negative → image correctly omitted there; real OPEN arcs
+  have room. Device/real-data visual check pending.
 - SHARE / REIMPORT (Apple Archive, chosen over .zip — native, no dep): `ScanArchive`
   (Model/) LZFSE-archives/extracts a dir tree (AppleArchive+System). `ScanLibrary.
   exportScan/exportAll` stage a mirror of the store layout (+manifest.json) →

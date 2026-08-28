@@ -1,5 +1,6 @@
 import Foundation
 import Observation
+import CoreGraphics
 import simd
 import MeshKit
 import ExportKit
@@ -155,10 +156,18 @@ final class AppModel {
         let name = animals.first { $0.id == animalID }?.name ?? "Animal"
         let date = Date.now.formatted(date: .abbreviated, time: .shortened)
         let url = library.exportsDirectory(animalID, scanID).appendingPathComponent("report.pdf")
+        // Offscreen snapshot of the painted 3D model (with tracings) to embed.
+        var modelImage: CGImage?
+        if let surface = result.exports.paintedSurfaceURL {
+            modelImage = Model3DSnapshot.render(surfaceURL: surface,
+                                                tracingsURL: result.exports.tracingsURL,
+                                                size: CGSize(width: 1600, height: 1000))
+        }
         do {
             try PDFReportWriter.write(animalName: name, dateText: date,
                                       sections: result.sections, rocker: result.rocker,
-                                      imperial: imperial, pageSize: pageSize, to: url)
+                                      imperial: imperial, pageSize: pageSize,
+                                      modelImage: modelImage, to: url)
             return url
         } catch {
             errorMessage = "Couldn't write PDF: \(error.localizedDescription)"

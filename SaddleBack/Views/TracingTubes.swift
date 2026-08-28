@@ -13,9 +13,11 @@ enum TracingTubes {
 
     /// Nodes for the tracings in `url` (world frame), recentered by `center`, with a
     /// tube radius sized relative to `modelExtent` (the bounding-box diagonal, m).
-    static func nodes(tracingsURL url: URL?, center: SIMD3<Float>, modelExtent: Float) -> [SCNNode] {
+    /// `radiusScale` thins/thickens the tubes (e.g. thinner for the PDF snapshot).
+    static func nodes(tracingsURL url: URL?, center: SIMD3<Float>, modelExtent: Float,
+                      radiusScale: Float = 1) -> [SCNNode] {
         guard let url, let lines = try? PolylineIO.read(url), !lines.isEmpty else { return [] }
-        let radius = max(modelExtent * 0.006, 0.003)
+        let radius = max(modelExtent * 0.006, 0.003) * radiusScale
         var nodes: [SCNNode] = []
         if let spine = geometry(Array(lines.prefix(1)), center: center, radius: radius, color: spineColor) {
             let n = SCNNode(geometry: spine); n.renderingOrder = 10; nodes.append(n)

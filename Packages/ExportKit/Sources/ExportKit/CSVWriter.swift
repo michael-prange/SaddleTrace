@@ -22,12 +22,12 @@ public enum CSVWriter {
         return out
     }
 
-    /// `station_index, arc_length_cm, width_cm, angle_left_deg, angle_right_deg,
-    /// symmetry_rms_mm` — one row per station.
+    /// `station_index, arc_length_cm, width_below_spine_cm, angle_left_deg,
+    /// angle_right_deg, symmetry_rms_mm, reliable` — one row per station.
     public static func metricsCSV(_ metrics: [SectionMetrics]) -> String {
-        var out = "station_index,arc_length_cm,width_cm,angle_left_deg,angle_right_deg,symmetry_rms_mm,reliable\n"
+        var out = "station_index,arc_length_cm,width_below_spine_cm,angle_left_deg,angle_right_deg,symmetry_rms_mm,reliable\n"
         for m in metrics {
-            out += "\(m.stationIndex),\(fmt(m.arcLength * mToCm)),\(fmt(m.widthAtSpineLevel * mToCm)),"
+            out += "\(m.stationIndex),\(fmt(m.arcLength * mToCm)),\(fmt(m.widthBelowSpine * mToCm)),"
             out += "\(fmt(m.angleLeftDegrees)),\(fmt(m.angleRightDegrees)),\(fmt(m.symmetricErrorRMS * mToMm)),"
             out += "\(m.isReliable ? 1 : 0)\n"
         }

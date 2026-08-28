@@ -8,8 +8,10 @@ import simd
 public struct SectionMetrics: Sendable {
     public let stationIndex: Int
     public let arcLength: Double
-    /// Horizontal extent of the section at spine level (v = 0).
-    public let widthAtSpineLevel: Double
+    /// Horizontal width of the back a fixed depth below the spine top
+    /// (`Configuration.widthDepthBelowSpine`, default 5 cm). Measured there rather
+    /// than at spine level, where a rooftop section is only ~a point.
+    public let widthBelowSpine: Double
     /// Drop from spine level to the lowest point of the section.
     public let depthBelowSpine: Double
     /// RMS left/right asymmetry of the section width (mirror test).
@@ -34,6 +36,9 @@ public enum SectionMetricsCalculator {
     public struct Configuration: Sendable {
         /// Lateral distance from the spine at which tree angles are measured.
         public var lateralAngleDistance: Double = 0.05
+        /// Depth below the spine top at which the section width is measured. At
+        /// spine level (0) a rooftop section is ~a point; 5 cm down gives a real width.
+        public var widthDepthBelowSpine: Double = 0.05
         /// Finite-difference step for the tree-angle slope.
         public var angleDelta: Double = 0.01
         /// Number of vertical levels sampled for the symmetry metric.
@@ -48,9 +53,9 @@ public enum SectionMetricsCalculator {
     ) -> SectionMetrics {
         let pts = section.points2D
 
-        // Width at spine level (v = 0).
-        let atZero = crossings(of: pts, level: 0, axis: .horizontal)
-        let width = atZero.count >= 2 ? (atZero.max()! - atZero.min()!) : 0
+        // Width a fixed depth below the spine top (v = -widthDepthBelowSpine).
+        let widthCrossings = crossings(of: pts, level: -cfg.widthDepthBelowSpine, axis: .horizontal)
+        let width = widthCrossings.count >= 2 ? (widthCrossings.max()! - widthCrossings.min()!) : 0
 
         // Depth below the spine.
         let minV = pts.map(\.y).min() ?? 0
@@ -90,7 +95,7 @@ public enum SectionMetricsCalculator {
 
         return SectionMetrics(
             stationIndex: section.stationIndex, arcLength: section.arcLength,
-            widthAtSpineLevel: width, depthBelowSpine: depth, symmetricErrorRMS: symmetry,
+            widthBelowSpine: width, depthBelowSpine: depth, symmetricErrorRMS: symmetry,
             angleLeftDegrees: angleLeft, angleRightDegrees: angleRight,
             curvatureAlongSpine: curvature, isReliable: reliable
         )
