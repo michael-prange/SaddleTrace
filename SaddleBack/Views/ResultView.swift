@@ -116,7 +116,7 @@ struct ResultView: View {
                 Spacer()
                 MetricInfoButton(
                     title: "Width below spine",
-                    message: "For each cross-section, how wide the back is 5 cm (about 2 in) below the top of the spine — the left-to-right distance across the section at that height. (At spine level itself the section is just its peak, so the width there is ~0; measuring a little lower gives a meaningful width.) The horizontal axis is distance from the withers (0), stepping toward the tail.")
+                    message: "For each cross-section, how wide the back is 5 cm below the top of the spine. The horizontal axis is distance from the withers (0), stepping toward the tail.")
             }
         }
     }

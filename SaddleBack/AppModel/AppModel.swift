@@ -167,7 +167,8 @@ final class AppModel {
             try PDFReportWriter.write(animalName: name, dateText: date,
                                       sections: result.sections, rocker: result.rocker,
                                       imperial: imperial, pageSize: pageSize,
-                                      modelImage: modelImage, to: url)
+                                      modelImage: modelImage, withersArcLength: result.spine.withersArcLength,
+                                      to: url)
             return url
         } catch {
             errorMessage = "Couldn't write PDF: \(error.localizedDescription)"

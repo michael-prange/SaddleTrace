@@ -49,7 +49,7 @@ public enum PDFReportWriter {
     public static func pdfData(animalName: String, dateText: String,
                                sections: [CrossSection], rocker: [SIMD2<Double>],
                                imperial: Bool, pageSize: PDFPageSize = .letter,
-                               modelImage: CGImage? = nil) -> Data {
+                               modelImage: CGImage? = nil, withersArcLength: Double? = nil) -> Data {
         let ordered = sections.sorted { $0.stationIndex < $1.stationIndex }
         let page = pageSize.landscapeSize
         let pdf = NSMutableData()
@@ -71,7 +71,7 @@ public enum PDFReportWriter {
         ctx.beginPDFPage(nil)
         drawSectionsPage(in: ctx, page: page, animalName: animalName, dateText: dateText,
                          sections: ordered, rocker: rocker, imperial: imperial, ppm: ppm, scale: scale,
-                         modelImage: modelImage)
+                         modelImage: modelImage, withersArcLength: withersArcLength)
         ctx.endPDFPage()
 
         // Page 2: the topline continued at the same scale; placed to the right of
@@ -88,10 +88,10 @@ public enum PDFReportWriter {
     public static func write(animalName: String, dateText: String,
                              sections: [CrossSection], rocker: [SIMD2<Double>],
                              imperial: Bool, pageSize: PDFPageSize = .letter,
-                             modelImage: CGImage? = nil, to url: URL) throws {
+                             modelImage: CGImage? = nil, withersArcLength: Double? = nil, to url: URL) throws {
         try pdfData(animalName: animalName, dateText: dateText,
                     sections: sections, rocker: rocker, imperial: imperial, pageSize: pageSize,
-                    modelImage: modelImage)
+                    modelImage: modelImage, withersArcLength: withersArcLength)
             .write(to: url, options: .atomic)
     }
 
@@ -103,7 +103,8 @@ public enum PDFReportWriter {
     private static func drawSectionsPage(in ctx: CGContext, page: CGSize, animalName: String,
                                          dateText: String, sections: [CrossSection],
                                          rocker: [SIMD2<Double>], imperial: Bool,
-                                         ppm: CGFloat, scale: CGFloat, modelImage: CGImage?) {
+                                         ppm: CGFloat, scale: CGFloat, modelImage: CGImage?,
+                                         withersArcLength: Double?) {
         let pageWidth = page.width, pageHeight = page.height
         let contentLeft = sideMargin
         let contentWidth = pageWidth - 2 * sideMargin
@@ -144,19 +145,22 @@ public enum PDFReportWriter {
             let minU = pts.map(\.x).min()!, maxU = pts.map(\.x).max()!
             let leftX = centerX + CGFloat(minU) * ppm
             let rightX = centerX + CGFloat(maxU) * ppm
-            if i == 0 {
+            // Label by station index (not fan position) so a dropped station shows
+            // as a gap in the numbering.
+            if section.stationIndex == 0 {
                 // Withers: title above the apex, L/R at the ends.
                 drawText("Withers #0", at: CGPoint(x: centerX - 26, y: apexY + 6), size: 10, bold: true, in: ctx)
                 drawText("L", at: CGPoint(x: leftX - 14, y: apexY - 4), size: 10, bold: true, in: ctx)
                 drawText("R", at: CGPoint(x: rightX + 6, y: apexY - 4), size: 10, bold: true, in: ctx)
             } else {
-                drawText("#\(i)", at: CGPoint(x: rightX + 8, y: apexY - 4), size: 10, in: ctx)
+                drawText("#\(section.stationIndex)", at: CGPoint(x: rightX + 8, y: apexY - 4), size: 10, in: ctx)
             }
         }
 
         // Legend (top-right): section number, distance from the withers, and the
         // matching curve color.
-        drawLegend(in: ctx, page: page, sections: sections, imperial: imperial)
+        drawLegend(in: ctx, page: page, sections: sections, imperial: imperial,
+                   withersArcLength: withersArcLength)
 
         // Topline in the lower band — the first page-width of arc at the shared
         // scale. The z→y mapping and ppm match page 2, so placing page 2 to the
@@ -386,9 +390,11 @@ public enum PDFReportWriter {
 
     /// Draws the legend box in the top-right corner: one row per section with a
     /// color swatch, the section number, and its distance from the withers.
-    private static func drawLegend(in ctx: CGContext, page: CGSize, sections: [CrossSection], imperial: Bool) {
+    private static func drawLegend(in ctx: CGContext, page: CGSize, sections: [CrossSection],
+                                   imperial: Bool, withersArcLength: Double?) {
         guard !sections.isEmpty else { return }
-        let withersArc = sections.first { $0.stationIndex == 0 }?.arcLength
+        let withersArc = withersArcLength
+            ?? sections.first { $0.stationIndex == 0 }?.arcLength
             ?? sections.map(\.arcLength).min() ?? 0
 
         let rowH: CGFloat = 14, pad: CGFloat = 8, titleH: CGFloat = 16, boxW: CGFloat = 172
@@ -417,7 +423,7 @@ public enum PDFReportWriter {
             let dist = abs(section.arcLength - withersArc)
             let distStr = imperial ? String(format: "%.1f in", dist / 0.0254)
                                    : String(format: "%.1f cm", dist * 100)
-            let label = i == 0 ? "#0  Withers" : "#\(i)   \(distStr)"
+            let label = section.stationIndex == 0 ? "#0  Withers" : "#\(section.stationIndex)   \(distStr)"
             drawText(label, at: CGPoint(x: box.minX + pad + 30, y: y), size: 9, in: ctx)
         }
     }

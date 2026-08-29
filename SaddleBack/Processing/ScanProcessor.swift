@@ -146,8 +146,17 @@ actor ScanProcessor {
 
         var cfg = CrossSectionExtractor.Configuration()
         cfg.lateralHalfWidth = 0.2032   // 8 inches each side of the spine (fits 11×17 at true scale)
-        let sections = CrossSectionExtractor.extract(cropped, curve: curve, atArcLengths: stationArcs, configuration: cfg)
-        let metrics = sections.map { SectionMetricsCalculator.metrics(for: $0, curve: curve) }
+        let allSections = CrossSectionExtractor.extract(cropped, curve: curve, atArcLengths: stationArcs, configuration: cfg)
+        let allMetrics = allSections.map { SectionMetricsCalculator.metrics(for: $0, curve: curve) }
+
+        // Drop cross-sections that don't fully cover the back (one side missing
+        // during capture): keep only those reaching ±5 cm on both sides of the
+        // spine (`isReliable`). Dropped everywhere downstream — sections, metrics,
+        // tracings, the section fan, and the CSV/DXF exports. Station indices keep
+        // their original values so a gap in numbering signals a dropped station.
+        let kept = zip(allSections, allMetrics).filter { $0.1.isReliable }
+        let sections = kept.map(\.0)
+        let metrics = kept.map(\.1)
 
         // Sample the topline "rocker" (arc, height) and the 3D spine polyline over
         // the ROI at ~1 cm.
