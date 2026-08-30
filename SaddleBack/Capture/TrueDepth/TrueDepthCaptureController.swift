@@ -12,8 +12,8 @@ import simd
 // this type is an `@objc` AVFoundation delegate — so it can't be an actor — and
 // it dispatches `self` onto its own serial `sessionQueue`/`dataQueue`. The
 // compiler can't prove the resulting queue-confinement, so we assert it: all
-// capture state is mutated only on the serial data queue; cross-queue fields are
-// `nonisolated(unsafe)` and set once before frames flow.
+// capture state is mutated only on the serial data queue. The one cross-queue
+// field, `renderer`, is `nonisolated(unsafe)` and set once before frames flow.
 nonisolated final class TrueDepthCaptureController: NSObject, AVCaptureDataOutputSynchronizerDelegate, @unchecked Sendable {
 
     private let model: TrueDepthCaptureModel
@@ -31,12 +31,16 @@ nonisolated final class TrueDepthCaptureController: NSObject, AVCaptureDataOutpu
     private var scanning = false
     private var lastSave = 0.0
     private var lastCloud = 0.0
-    /// Set from the UI to force scanning to begin even if auto-start conditions
-    /// aren't met (reliability fallback).
-    nonisolated(unsafe) var manualStartRequested = false
 
-    /// Force capture to start now.
-    func requestStart() { manualStartRequested = true }
+    /// Force capture to start now, even if the auto-start conditions aren't met
+    /// (the reliability fallback behind the "Start Scanning" button).
+    ///
+    /// Sets the queue-confined state on its owning queue rather than through a
+    /// shared flag. The flag it replaces was written from the main actor while
+    /// frames were already streaming and read on `dataQueue` — an unsynchronized
+    /// race, and precisely the case the type's `@unchecked Sendable` note claims
+    /// doesn't happen.
+    func requestStart() { dataQueue.async { self.scanning = true } }
 
     // Working-distance band (m); mirrors TrueDepthCaptureModel for the data queue.
     private static let nearLimit = 0.25
@@ -153,9 +157,10 @@ nonisolated final class TrueDepthCaptureController: NSObject, AVCaptureDataOutpu
         let faceDown = gravity.z > Self.autoStartGravityZ
         let now = CACurrentMediaTime()
 
-        // Auto-start (roughly face-down + in a generous range) or a manual request.
+        // Auto-start (roughly face-down + in a generous range); a manual request
+        // sets `scanning` directly from `requestStart()`.
         let inRange = distance.map { $0 >= Self.autoStartNear && $0 <= Self.autoStartFar } ?? false
-        if !scanning, (faceDown && inRange) || manualStartRequested { scanning = true }
+        if !scanning, faceDown, inRange { scanning = true }
 
         if scanning, now - lastSave >= 0.33 {
             lastSave = now

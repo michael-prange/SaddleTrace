@@ -21,6 +21,11 @@ nonisolated enum RawShotWriter {
         let confidence: [UInt8]
         let depthW: Int
         let depthH: Int
+        /// The confidence map's OWN dimensions. Usually equal to the depth map's,
+        /// but they are separate buffers — writing depth dims into the confidence
+        /// header would silently mis-shape the array on read-back.
+        let confW: Int
+        let confH: Int
         let intrinsics: [Float]        // column-major 3×3
         let imageWidth: Double
         let imageHeight: Double
@@ -49,6 +54,7 @@ nonisolated enum RawShotWriter {
 
         var depth: [Float] = [], confidence: [UInt8] = []
         var dw = 0, dh = 0
+        var cw = 0, ch = 0
         if let sd = frame.sceneDepth {
             let dm = sd.depthMap
             CVPixelBufferLockBaseAddress(dm, .readOnly)
@@ -65,7 +71,7 @@ nonisolated enum RawShotWriter {
 
             if let cm = sd.confidenceMap {
                 CVPixelBufferLockBaseAddress(cm, .readOnly)
-                let cw = CVPixelBufferGetWidth(cm), ch = CVPixelBufferGetHeight(cm)
+                cw = CVPixelBufferGetWidth(cm); ch = CVPixelBufferGetHeight(cm)
                 if let base = CVPixelBufferGetBaseAddress(cm) {
                     let row = CVPixelBufferGetBytesPerRow(cm)
                     confidence = [UInt8](repeating: 0, count: cw * ch)
@@ -82,7 +88,8 @@ nonisolated enum RawShotWriter {
         let t = frame.camera.transform
         let res = frame.camera.imageResolution
         return RawShot(
-            photoHEIC: heic, depth: depth, confidence: confidence, depthW: dw, depthH: dh,
+            photoHEIC: heic, depth: depth, confidence: confidence,
+            depthW: dw, depthH: dh, confW: cw, confH: ch,
             intrinsics: [k.columns.0.x, k.columns.0.y, k.columns.0.z,
                          k.columns.1.x, k.columns.1.y, k.columns.1.z,
                          k.columns.2.x, k.columns.2.y, k.columns.2.z],
@@ -108,7 +115,7 @@ nonisolated enum RawShotWriter {
         }
         if !shot.confidence.isEmpty {
             var data = Data()
-            var w = UInt32(shot.depthW), h = UInt32(shot.depthH)
+            var w = UInt32(shot.confW), h = UInt32(shot.confH)
             withUnsafeBytes(of: &w) { data.append(contentsOf: $0) }
             withUnsafeBytes(of: &h) { data.append(contentsOf: $0) }
             data.append(contentsOf: shot.confidence)

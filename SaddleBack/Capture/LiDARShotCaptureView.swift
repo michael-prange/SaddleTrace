@@ -120,6 +120,10 @@ struct LiDARShotCaptureView: View {
                             .frame(maxWidth: .infinity).padding(.vertical, 6)
                     }
                     .buttonStyle(.bordered).tint(.white)
+                    // Retaking mid-save deleted the directory the background write
+                    // was still writing into, and its completion then flipped
+                    // `shotCaptured` back on over an emptied point cloud.
+                    .disabled(model.isBusy)
 
                     Button {
                         onFinish(framesDirectory)
@@ -226,7 +230,11 @@ private struct ARDepthPreview: UIViewRepresentable {
 
         // Capture closure: build the mesh on the main actor (reads AR buffers),
         // then write to disk off-main to keep the shutter responsive.
-        model.capture = { [weak view] in
+        // `model` is captured WEAKLY: the model owns this closure, so a strong
+        // capture here is a reference cycle that leaks the model and its point
+        // clouds for every capture session.
+        model.capture = { [weak model, weak view] in
+            guard let model else { return }
             guard let frame = view?.session.currentFrame else {
                 model.errorText = "No camera frame yet — hold steady"; return
             }
