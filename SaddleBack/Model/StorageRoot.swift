@@ -30,16 +30,22 @@ nonisolated enum StorageRoot {
         return Resolved(url: iCloudAnimals, isICloud: true)
     }
 
-    /// One-time move of local animal folders into iCloud when the iCloud store is
-    /// still empty. Best-effort.
+    /// Moves any animal folders still sitting in local Documents into iCloud.
+    /// Best-effort, and idempotent.
+    ///
+    /// Runs on EVERY launch, not just when the iCloud store is empty: each
+    /// `setUbiquitous` can fail independently, and gating on "iCloud is still
+    /// empty" meant one partial migration stranded the remaining animals in the
+    /// local store forever — invisible, because the app now reads from iCloud.
     private static func migrateLocalScansIfNeeded(from local: URL, to iCloud: URL) {
         let fm = FileManager.default
         let localItems = (try? fm.contentsOfDirectory(at: local, includingPropertiesForKeys: nil)) ?? []
-        let iCloudItems = (try? fm.contentsOfDirectory(at: iCloud, includingPropertiesForKeys: nil)) ?? []
-        guard !localItems.isEmpty, iCloudItems.isEmpty else { return }
+        guard !localItems.isEmpty else { return }
 
         for item in localItems {
             let destination = iCloud.appendingPathComponent(item.lastPathComponent)
+            // Never clobber an animal that already made it across.
+            guard !fm.fileExists(atPath: destination.path) else { continue }
             try? fm.setUbiquitous(true, itemAt: item, destinationURL: destination)
         }
     }

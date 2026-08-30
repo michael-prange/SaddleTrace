@@ -60,7 +60,7 @@ actor ScanLibrary {
     // MARK: - Animals
 
     /// Loads all animals, sorted by name. Malformed records are skipped.
-    func loadAnimals() throws -> [AnimalRecord] {
+    func loadAnimals() async throws -> [AnimalRecord] {
         try ensureDirectory(root)
         let dirs = try FileManager.default.contentsOfDirectory(
             at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
@@ -68,7 +68,7 @@ actor ScanLibrary {
         var animals: [AnimalRecord] = []
         for dir in dirs {
             let info = dir.appendingPathComponent("info.json")
-            ensureDownloaded(info)
+            await ensureDownloaded(info)
             guard let data = try? Data(contentsOf: info),
                   let record = try? Self.decoder.decode(AnimalRecord.self, from: data)
             else { continue }
@@ -96,7 +96,7 @@ actor ScanLibrary {
     // MARK: - Scans
 
     /// Loads an animal's scans, newest first.
-    func loadScans(for animalID: UUID) throws -> [ScanRecord] {
+    func loadScans(for animalID: UUID) async throws -> [ScanRecord] {
         let scansDir = scansDirectory(animalID)
         guard FileManager.default.fileExists(atPath: scansDir.path) else { return [] }
         let dirs = try FileManager.default.contentsOfDirectory(
@@ -105,7 +105,7 @@ actor ScanLibrary {
         var scans: [ScanRecord] = []
         for dir in dirs {
             let meta = dir.appendingPathComponent("metadata.json")
-            ensureDownloaded(meta)
+            await ensureDownloaded(meta)
             guard let data = try? Data(contentsOf: meta),
                   let record = try? Self.decoder.decode(ScanRecord.self, from: data)
             else { continue }
@@ -157,7 +157,7 @@ actor ScanLibrary {
 
     /// Materializes an iCloud-evicted artifact on demand (best-effort). Public
     /// entry point for readers like the result loader.
-    func materialize(_ url: URL) { ensureDownloaded(url) }
+    func materialize(_ url: URL) async { await ensureDownloaded(url) }
 
     // MARK: - Share / import (Apple Archive)
 
@@ -169,7 +169,7 @@ actor ScanLibrary {
     /// Archives a single scan (plus its animal's `info.json`) into a shareable
     /// `.saddleback` file in a temp directory; returns its URL for the caller to
     /// share. The recipient reimports it with `importArchive(from:)`.
-    func exportScan(animalID: UUID, scanID: UUID) throws -> URL {
+    func exportScan(animalID: UUID, scanID: UUID) async throws -> URL {
         let staging = try makeStaging()
         defer { try? FileManager.default.removeItem(at: staging) }
         let fm = FileManager.default
@@ -178,25 +178,25 @@ actor ScanLibrary {
         try ensureDirectory(animalStage.appendingPathComponent("scans", isDirectory: true))
 
         let info = infoURL(animalID)
-        ensureDownloaded(info)
+        await ensureDownloaded(info)
         try? fm.copyItem(at: info, to: animalStage.appendingPathComponent("info.json"))
 
         let src = scanDirectory(animalID, scanID)
-        downloadTree(src)
+        await downloadTree(src)
         try fm.copyItem(at: src, to: animalStage.appendingPathComponent("scans/\(scanID.uuidString)", isDirectory: true))
 
         try writeManifest(kind: "scan", to: staging)
-        return try makeArchive(from: staging, named: archiveName(animalID: animalID))
+        return try makeArchive(from: staging, named: await archiveName(animalID: animalID))
     }
 
     /// Archives the whole animal store into a shareable `.saddleback` file; returns
     /// its URL. The recipient reimports it with `importArchive(from:)`.
-    func exportAll() throws -> URL {
+    func exportAll() async throws -> URL {
         let staging = try makeStaging()
         defer { try? FileManager.default.removeItem(at: staging) }
 
         try ensureDirectory(root)
-        downloadTree(root)
+        await downloadTree(root)
         try FileManager.default.copyItem(at: root, to: staging.appendingPathComponent("animals", isDirectory: true))
 
         try writeManifest(kind: "library", to: staging)
@@ -295,9 +295,9 @@ actor ScanLibrary {
     }
 
     /// A shareable file name from the animal's name + a timestamp.
-    private func archiveName(animalID: UUID) -> String {
+    private func archiveName(animalID: UUID) async -> String {
         let info = infoURL(animalID)
-        ensureDownloaded(info)
+        await ensureDownloaded(info)
         var base = "Scan"
         if let data = try? Data(contentsOf: info),
            let animal = try? Self.decoder.decode(AnimalRecord.self, from: data) {
@@ -316,10 +316,21 @@ actor ScanLibrary {
 
     /// Best-effort recursive iCloud download so evicted files are present before
     /// archiving. No-op for local (non-iCloud) stores.
-    private func downloadTree(_ url: URL) {
-        ensureDownloaded(url)
-        guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) else { return }
-        for case let file as URL in e { ensureDownloaded(file) }
+    ///
+    /// Requests every download FIRST and then waits once. Waiting per file in
+    /// turn meant a large evicted store took (5 s × file count) to archive.
+    private func downloadTree(_ url: URL) async {
+        var requested: [URL] = []
+        for candidate in [url] + descendants(of: url) where needsDownload(candidate) {
+            try? FileManager.default.startDownloadingUbiquitousItem(at: candidate)
+            requested.append(candidate)
+        }
+        await waitUntilDownloaded(requested, timeout: Self.treeDownloadTimeout)
+    }
+
+    private nonisolated func descendants(of url: URL) -> [URL] {
+        guard let e = FileManager.default.enumerator(at: url, includingPropertiesForKeys: nil) else { return [] }
+        return e.compactMap { $0 as? URL }
     }
 
     // MARK: - Internals
@@ -328,18 +339,37 @@ actor ScanLibrary {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     }
 
-    /// If `url` is an iCloud item that's been evicted locally, request its
-    /// download and briefly wait for small files to materialize (best-effort;
-    /// requires a network connection). No-op for non-iCloud or already-local files.
-    private func ensureDownloaded(_ url: URL) {
-        let fm = FileManager.default
+    private static let fileDownloadTimeout: Duration = .seconds(5)
+    private static let treeDownloadTimeout: Duration = .seconds(60)
+
+    /// Whether `url` is an iCloud item that is currently evicted. False for
+    /// non-iCloud items, which never need downloading.
+    private nonisolated func needsDownload(_ url: URL) -> Bool {
         guard let status = try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey])
-            .ubiquitousItemDownloadingStatus, status != .current else { return }
-        try? fm.startDownloadingUbiquitousItem(at: url)
-        for _ in 0..<50 {
-            if (try? url.resourceValues(forKeys: [.ubiquitousItemDownloadingStatusKey])
-                .ubiquitousItemDownloadingStatus) == .current { return }
-            Thread.sleep(forTimeInterval: 0.1)
+            .ubiquitousItemDownloadingStatus else { return false }
+        return status != .current
+    }
+
+    /// If `url` is an evicted iCloud item, request it and wait briefly
+    /// (best-effort; needs a network connection). No-op otherwise.
+    private func ensureDownloaded(_ url: URL) async {
+        guard needsDownload(url) else { return }
+        try? FileManager.default.startDownloadingUbiquitousItem(at: url)
+        await waitUntilDownloaded([url], timeout: Self.fileDownloadTimeout)
+    }
+
+    /// Polls already-requested downloads until all are local or `timeout` passes.
+    ///
+    /// Suspends rather than blocking: this runs on the actor's executor, where the
+    /// previous `Thread.sleep` tied up a cooperative thread for the whole wait.
+    private func waitUntilDownloaded(_ urls: [URL], timeout: Duration) async {
+        guard !urls.isEmpty else { return }
+        let deadline = ContinuousClock.now.advanced(by: timeout)
+        var pending = urls
+        while ContinuousClock.now < deadline {
+            pending = pending.filter { needsDownload($0) }
+            if pending.isEmpty { return }
+            try? await Task.sleep(for: .milliseconds(100))
         }
     }
 
