@@ -158,13 +158,29 @@ actor ScanProcessor {
         let sections = kept.map(\.0)
         let metrics = kept.map(\.1)
 
+        // Clip the topline sampling to the span actually covered by reliable
+        // cross-sections. Past the caudal-most (or cranial-most) reliable station
+        // the spine's lateral fit is one-sided and untrustworthy — that is what
+        // makes the rear of the curve swerve. `stationArcs` is parallel to
+        // `allMetrics`, so the reliable stations give the trustworthy arc span.
+        let keptArcs = zip(stationArcs, allMetrics).filter { $0.1.isReliable }.map(\.0)
+        let sampleStartS: Double, sampleEndS: Double
+        if let lo = keptArcs.min(), let hi = keptArcs.max() {
+            // Keep caudal direction: front end is the reliable station nearest the withers.
+            sampleStartS = direction > 0 ? lo : hi
+            sampleEndS   = direction > 0 ? hi : lo
+        } else {
+            sampleStartS = startS   // no reliable sections: fall back to the full ROI
+            sampleEndS = endS
+        }
+
         // Sample the topline "rocker" (arc, height) and the 3D spine polyline over
-        // the ROI at ~1 cm.
+        // the reliable span at ~1 cm.
         var rocker: [SIMD2<Double>] = []
         var spinePolyline: [SIMD3<Double>] = []
-        let steps = max(Int(abs(endS - startS) / 0.01), 1)
+        let steps = max(Int(abs(sampleEndS - sampleStartS) / 0.01), 1)
         for i in 0...steps {
-            let rs = startS + (endS - startS) * Double(i) / Double(steps)
+            let rs = sampleStartS + (sampleEndS - sampleStartS) * Double(i) / Double(steps)
             let p = curve.point(atArcLength: rs)
             rocker.append(SIMD2<Double>(rs, p.z))
             spinePolyline.append(p)
