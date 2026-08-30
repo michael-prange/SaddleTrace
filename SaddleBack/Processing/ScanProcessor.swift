@@ -161,9 +161,10 @@ actor ScanProcessor {
         // Clip the topline sampling to the span actually covered by reliable
         // cross-sections. Past the caudal-most (or cranial-most) reliable station
         // the spine's lateral fit is one-sided and untrustworthy — that is what
-        // makes the rear of the curve swerve. `stationArcs` is parallel to
-        // `allMetrics`, so the reliable stations give the trustworthy arc span.
-        let keptArcs = zip(stationArcs, allMetrics).filter { $0.1.isReliable }.map(\.0)
+        // makes the rear of the curve swerve. Read each kept section's own
+        // `arcLength`: `CrossSectionExtractor` drops non-intersecting stations, so
+        // the section arrays are NOT index-aligned with `stationArcs`.
+        let keptArcs = sections.map(\.arcLength)
         let sampleStartS: Double, sampleEndS: Double
         if let lo = keptArcs.min(), let hi = keptArcs.max() {
             // Keep caudal direction: front end is the reliable station nearest the withers.
