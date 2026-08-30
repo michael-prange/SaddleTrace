@@ -26,6 +26,8 @@ public struct SmoothingSpline: Sendable {
 
     /// Evaluates the spline at `xq`, clamping to the fitted x-range.
     public func value(at xq: Double) -> Double {
+        // Fewer than two knots has no segment to interpolate: the fit is a constant.
+        guard x.count >= 2 else { return g.first ?? 0 }
         let (j, h, a, b) = segment(for: xq)
         return a * g[j] + b * g[j + 1]
             + ((a * a * a - a) * m[j] + (b * b * b - b) * m[j + 1]) * h * h / 6
@@ -33,6 +35,7 @@ public struct SmoothingSpline: Sendable {
 
     /// Evaluates the first derivative `dy/dx` at `xq`.
     public func derivative(at xq: Double) -> Double {
+        guard x.count >= 2 else { return 0 }
         let (j, h, a, b) = segment(for: xq)
         return (g[j + 1] - g[j]) / h
             - (3 * a * a - 1) / 6 * h * m[j]

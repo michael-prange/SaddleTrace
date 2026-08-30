@@ -141,3 +141,46 @@ struct SystemRandomNumberGeneratorSeeded: RandomNumberGenerator {
         return (-2 * log(max(u1, 1e-12))).squareRoot() * cos(2 * .pi * u2)
     }
 }
+
+@Suite("Spine curve nearest-point search")
+struct ClosestPointTests {
+
+    /// `closestPoint` seeds at the X-nearest sample and walks outward with an
+    /// exact lower bound instead of scanning the whole ~1 mm table. It must agree
+    /// with the brute-force scan everywhere — it runs once per mesh vertex during
+    /// ROI cropping, so a wrong shortcut would silently mis-crop the ROI.
+    @Test("Windowed search matches a brute-force scan")
+    func matchesBruteForce() {
+        let (mesh, _) = SyntheticBackMesh.make()
+        let norm = LongAxisNormalizer.normalized(mesh).mesh
+        let curve = SpineCurveFitter.fit(norm)!.curve
+
+        // Brute force over the same table the curve samples internally.
+        func brute(_ p: SIMD3<Double>) -> (Double, Double) {
+            var bestS = 0.0, bestSq = Double.infinity
+            var s = 0.0
+            let total = curve.totalArcLength
+            let steps = 4000
+            while s <= total {
+                let q = curve.point(atArcLength: s)
+                let d = simd_distance_squared(q, p)
+                if d < bestSq { bestSq = d; bestS = s }
+                s += total / Double(steps)
+            }
+            return (bestS, bestSq.squareRoot())
+        }
+
+        // Query every mesh vertex plus points well outside the curve's X range.
+        var queries = norm.positions.map { SIMD3<Double>($0) }
+        queries.append(SIMD3<Double>(curve.xMin - 1.0, 0.3, 0.2))
+        queries.append(SIMD3<Double>(curve.xMax + 1.0, -0.3, 1.4))
+
+        for p in queries.prefix(1200) {
+            let fast = curve.closestPoint(to: p)
+            let (_, refDistance) = brute(p)
+            // Same distance to within the sampling resolution of the reference.
+            #expect(abs(fast.distance - refDistance) < 2e-3)
+            #expect(fast.arcLength >= 0 && fast.arcLength <= curve.totalArcLength)
+        }
+    }
+}

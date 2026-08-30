@@ -48,12 +48,38 @@ public struct SpineCurve: Sendable {
     /// The closest point on the curve to `p`, returned as its arc length and the
     /// 3D Euclidean distance. Uses the ~1 mm sample table (sub-mm accuracy),
     /// which is ample for ROI cropping (Design §7.4).
+    ///
+    /// Seeds at the sample nearest in X (the table is uniform in X, so that index
+    /// is arithmetic) and walks outward. Any sample `j` is at least
+    /// `|p.x − sampleX[j]|` away, and `sampleX` is monotone, so each direction can
+    /// stop as soon as that lower bound exceeds the best distance found. The
+    /// result is identical to scanning the whole table, but touches a handful of
+    /// samples instead of thousands — this runs once per mesh vertex during ROI
+    /// cropping, so it dominates the pipeline's cost.
     public func closestPoint(to p: SIMD3<Double>) -> (arcLength: Double, distance: Double) {
-        var bestI = 0
-        var bestSq = Double.infinity
-        for i in 0..<samplePoint.count {
-            let d = simd_distance_squared(samplePoint[i], p)
-            if d < bestSq { bestSq = d; bestI = i }
+        let n = samplePoint.count
+        let span = sampleX[n - 1] - sampleX[0]
+        let t = (p.x - sampleX[0]) / span * Double(n - 1)
+        let seed = t.isFinite ? min(max(Int(t.rounded()), 0), n - 1) : 0
+
+        var bestI = seed
+        var bestSq = simd_distance_squared(samplePoint[seed], p)
+
+        var lo = seed - 1
+        while lo >= 0 {
+            let dx = p.x - sampleX[lo]
+            if dx * dx >= bestSq { break }
+            let d = simd_distance_squared(samplePoint[lo], p)
+            if d < bestSq { bestSq = d; bestI = lo }
+            lo -= 1
+        }
+        var hi = seed + 1
+        while hi < n {
+            let dx = sampleX[hi] - p.x
+            if dx * dx >= bestSq { break }
+            let d = simd_distance_squared(samplePoint[hi], p)
+            if d < bestSq { bestSq = d; bestI = hi }
+            hi += 1
         }
         return (cumulativeS[bestI], bestSq.squareRoot())
     }

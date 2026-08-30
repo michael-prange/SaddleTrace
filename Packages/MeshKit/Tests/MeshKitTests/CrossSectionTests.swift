@@ -199,3 +199,77 @@ struct CrossSectionTests {
         #expect(m.curvatureAlongSpine.isFinite)
     }
 }
+
+@Suite("Cross-section clipping & plane robustness")
+struct CrossSectionClippingTests {
+
+    /// A triangle with one vertex lying exactly ON the cutting plane used to be
+    /// dropped: the strict sign test found only one crossing, punching a hole in
+    /// the section polyline. A vertex at d == 0 now counts as one consistent side.
+    @Test("A vertex exactly on the plane still yields a segment")
+    func vertexOnPlane() {
+        // v0 sits exactly on z = 0; v1 above, v2 below.
+        let mesh = TriangleMesh(
+            positions: [
+                SIMD3<Float>(0, 0, 0),
+                SIMD3<Float>(1, 0, 1),
+                SIMD3<Float>(-1, 0, -1),
+            ],
+            indices: [0, 1, 2]
+        )
+        let segs = PlaneMeshIntersector.intersect(
+            mesh, planePoint: SIMD3<Double>(0, 0, 0), planeNormal: SIMD3<Double>(0, 0, 1)
+        )
+        #expect(segs.count == 1)
+        let (p, q) = segs[0]
+        #expect(abs(p.z) < 1e-9 && abs(q.z) < 1e-9)
+        // One endpoint is the on-plane vertex itself.
+        let touchesV0 = simd_length(p) < 1e-9 || simd_length(q) < 1e-9
+        #expect(touchesV0)
+    }
+
+    /// With a lateral clip set, `points3D` must be the clipped curve too — the
+    /// tracings overlaid on the 3D model are built from it and have to match the
+    /// printed section fan, which is built from `points2D`.
+    @Test("Clipped sections keep points3D and points2D in step")
+    func clippedRepresentationsAgree() {
+        let (mesh, _) = SyntheticBackMesh.make()
+        let norm = LongAxisNormalizer.normalized(mesh).mesh
+        let curve = SpineCurveFitter.fit(norm)!.curve
+        let marks = LandmarkDetector.detect(on: curve)
+        let cropped = ROICropper.crop(norm, curve: curve, roiArcLength: marks.roiArcLengthRange).mesh
+
+        let halfWidth = 0.2032
+        var cfg = CrossSectionExtractor.Configuration()
+        cfg.lateralHalfWidth = halfWidth
+        let sections = CrossSectionExtractor.extract(
+            cropped, curve: curve, roiArcLength: marks.roiArcLengthRange, configuration: cfg)
+        #expect(!sections.isEmpty)
+
+        // The clip has to actually bite on this fixture, or the test proves nothing.
+        var unclipped = CrossSectionExtractor.Configuration()
+        unclipped.lateralHalfWidth = nil
+        let full = CrossSectionExtractor.extract(
+            cropped, curve: curve, roiArcLength: marks.roiArcLengthRange, configuration: unclipped)
+        #expect(full.contains { extent($0.points2D) > 2 * halfWidth })
+
+        for section in sections {
+            #expect(section.points3D.count == section.points2D.count)
+            // No point survives outside the band (interpolated ends sit on it).
+            #expect(section.points2D.allSatisfy { abs($0.x) <= halfWidth + 1e-9 })
+            // Each 3D point projects back onto its own 2D point.
+            for (p3, p2) in zip(section.points3D, section.points2D) {
+                let rel = p3 - section.origin
+                #expect(abs(simd_dot(rel, section.uAxis) - p2.x) < 1e-6)
+                #expect(abs(simd_dot(rel, section.vAxis) - p2.y) < 1e-6)
+                // …and lies in the cutting plane.
+                #expect(abs(simd_dot(rel, section.normal)) < 1e-6)
+            }
+        }
+    }
+
+    private func extent(_ pts: [SIMD2<Double>]) -> Double {
+        guard let lo = pts.map(\.x).min(), let hi = pts.map(\.x).max() else { return 0 }
+        return hi - lo
+    }
+}

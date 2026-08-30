@@ -10,11 +10,22 @@ public enum PLYWriter {
     public static func coloredPLY(positions: [SIMD3<Float>], colors: [SIMD3<Float>],
                                   indices: [UInt32]) -> String {
         let n = min(positions.count, colors.count)
+        // Only faces whose three corners survive the vertex count are emitted —
+        // otherwise a colors/positions mismatch would produce out-of-range face
+        // indices and an unreadable file.
+        var faces: [(UInt32, UInt32, UInt32)] = []
+        var f = 0
+        while f + 2 < indices.count {
+            let a = indices[f], b = indices[f + 1], c = indices[f + 2]
+            if Int(a) < n, Int(b) < n, Int(c) < n { faces.append((a, b, c)) }
+            f += 3
+        }
+
         var out = "ply\nformat ascii 1.0\ncomment SaddleBack painted surface\n"
         out += "element vertex \(n)\n"
         out += "property float x\nproperty float y\nproperty float z\n"
         out += "property uchar red\nproperty uchar green\nproperty uchar blue\n"
-        out += "element face \(indices.count / 3)\n"
+        out += "element face \(faces.count)\n"
         out += "property list uchar int vertex_indices\n"
         out += "end_header\n"
         func byte(_ v: Float) -> Int { min(max(Int(v * 255), 0), 255) }
@@ -22,10 +33,8 @@ public enum PLYWriter {
             let p = positions[i], c = colors[i]
             out += "\(fmt(p.x)) \(fmt(p.y)) \(fmt(p.z)) \(byte(c.x)) \(byte(c.y)) \(byte(c.z))\n"
         }
-        var t = 0
-        while t + 2 < indices.count {
-            out += "3 \(indices[t]) \(indices[t + 1]) \(indices[t + 2])\n"
-            t += 3
+        for (a, b, c) in faces {
+            out += "3 \(a) \(b) \(c)\n"
         }
         return out
     }

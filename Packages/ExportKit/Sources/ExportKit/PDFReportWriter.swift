@@ -4,13 +4,14 @@ import CoreText
 import simd
 import MeshKit
 
-/// Renders a single-page US-Letter PDF of the back's cross-sections and topline,
-/// drawn to an exact clean scale for saddle fitting (Design §11 PDF report).
+/// Renders a two-page PDF of the back's cross-sections and topline, drawn to an
+/// exact clean scale for saddle fitting (Design §11 PDF report).
 ///
-/// Layout: the longitudinal **topline (rocker)** on top (withers labeled), then a
-/// fanned stack of the transverse **sections** centered on the spine — station 0
-/// is the withers ("Withers #1", with L/R), the rest numbered. A "Scale 1:N"
-/// label and 2-unit scale bars make the plot measurable with a ruler.
+/// Page 1 carries a fanned stack of the transverse **sections** centered on the
+/// spine (station 0 is the withers, with L/R), a color legend, the embedded 3D
+/// model, and the first page-width of the **topline (rocker)**; page 2 continues
+/// the topline at the same scale so the two abut into one continuous back. A
+/// "Scale 1:N" label and 2-unit scale bars make the plot measurable with a ruler.
 /// Paper size for the cross-section report (drawn landscape). Tabloid (11×17)
 /// and A3 give the fitter more room; Letter and A4 are the common defaults.
 public enum PDFPageSize: String, CaseIterable, Sendable {
@@ -46,6 +47,39 @@ public enum PDFReportWriter {
 
     private static let niceScales: [CGFloat] = [1, 1.0/2, 1.0/3, 1.0/4, 1.0/5, 1.0/6, 1.0/8, 1.0/10]
 
+    /// Tightest fan spacing that still reads as separate curves.
+    static let minFanOffset: CGFloat = 8
+    static let legendRowH: CGFloat = 14
+    static let legendPad: CGFloat = 8
+    static let legendTitleH: CGFloat = 16
+    static let legendColW: CGFloat = 172
+
+    /// How many legend entries fit on the page, as a row × column grid.
+    struct LegendLayout {
+        let rows: Int, columns: Int
+        var capacity: Int { rows * columns }
+    }
+
+    static func legendLayout(page: CGSize) -> LegendLayout {
+        let availableH = (page.height - margin - 4) - margin
+        let rows = max(Int((availableH - legendPad * 2 - legendTitleH) / legendRowH), 1)
+        let columns = max(Int((page.width - 2 * margin) / legendColW), 1)
+        return LegendLayout(rows: rows, columns: columns)
+    }
+
+    /// The sections actually drawn, thinned to every Nth so that both the fan and
+    /// the legend fit on `page`, plus the stride used (1 = all of them). At fine
+    /// station spacing a long back yields far more sections than either can show,
+    /// and they used to simply run off the page edge.
+    static func displayedSections(_ sections: [CrossSection], page: CGSize,
+                                  heightForFan: CGFloat) -> (sections: [CrossSection], step: Int) {
+        let fanCapacity = heightForFan > 0 ? Int(heightForFan / minFanOffset) + 1 : 1
+        let capacity = max(min(fanCapacity, legendLayout(page: page).capacity), 1)
+        let step = max(Int((Double(sections.count) / Double(capacity)).rounded(.up)), 1)
+        guard step > 1 else { return (sections, 1) }
+        return (sections.enumerated().filter { $0.offset.isMultiple(of: step) }.map(\.element), step)
+    }
+
     public static func pdfData(animalName: String, dateText: String,
                                sections: [CrossSection], rocker: [SIMD2<Double>],
                                imperial: Bool, pageSize: PDFPageSize = .letter,
@@ -78,7 +112,8 @@ public enum PDFReportWriter {
         // page 1 (top edges level) it forms one continuous back, cut off at the edge.
         ctx.beginPDFPage(nil)
         drawToplinePage(in: ctx, page: page, animalName: animalName, dateText: dateText,
-                        rocker: rocker, imperial: imperial, ppm: ppm, scale: scale)
+                        rocker: rocker, imperial: imperial, ppm: ppm, scale: scale,
+                        withersArcLength: withersArcLength)
         ctx.endPDFPage()
 
         ctx.closePDF()
@@ -101,7 +136,7 @@ public enum PDFReportWriter {
     /// both at the shared `scale` (1:1 on Tabloid/A3, reduced on Letter/A4 so the
     /// widest ±8 in section still fits). `ppm = pointsPerMetre1to1 * scale`.
     private static func drawSectionsPage(in ctx: CGContext, page: CGSize, animalName: String,
-                                         dateText: String, sections: [CrossSection],
+                                         dateText: String, sections allSections: [CrossSection],
                                          rocker: [SIMD2<Double>], imperial: Bool,
                                          ppm: CGFloat, scale: CGFloat, modelImage: CGImage?,
                                          withersArcLength: Double?) {
@@ -109,22 +144,28 @@ public enum PDFReportWriter {
         let contentLeft = sideMargin
         let contentWidth = pageWidth - 2 * sideMargin
 
-        let maxSectionDepth = sections.map { extentV($0.points2D) }.max() ?? 0.001
+        let maxSectionDepth = allSections.map { extentV($0.points2D) }.max() ?? 0.001
 
         let targetFan: CGFloat = 60   // ~5/6-inch target vertical spacing (roomy so
                                       // the colored sections are easy to tell apart)
         let titleSpace: CGFloat = 66
         let scaleBarSpace: CGFloat = 56
         let usableHeight = pageHeight - 2 * margin - titleSpace - scaleBarSpace
-        let gaps = CGFloat(max(sections.count - 1, 0))
         let heightForFan = usableHeight - CGFloat(maxSectionDepth) * ppm
-        let fanOffset = gaps > 0 ? max(4, min(targetFan, heightForFan / gaps)) : targetFan
+
+        // Fan and legend draw the SAME thinned list, so their colors keep matching.
+        let (sections, step) = displayedSections(allSections, page: page, heightForFan: heightForFan)
+
+        let gaps = CGFloat(max(sections.count - 1, 0))
+        // The thinning above guarantees heightForFan / gaps >= minFanOffset.
+        let fanOffset = gaps > 0 ? max(minFanOffset, min(targetFan, heightForFan / gaps)) : targetFan
 
         // Title.
         let top = pageHeight - margin
         drawText(animalName, at: CGPoint(x: contentLeft, y: top - 18), size: 18, bold: true, in: ctx)
         let scaleLabel = scale == 1 ? "Scale 1:1 (true size)" : "Scale 1:\(scaleString(scale))"
-        drawText("\(dateText)   ·   Cross-sections   ·   \(scaleLabel)",
+        let thinNote = step > 1 ? "   ·   showing \(sections.count) of \(allSections.count) sections" : ""
+        drawText("\(dateText)   ·   Cross-sections   ·   \(scaleLabel)\(thinNote)",
                  at: CGPoint(x: contentLeft, y: top - 36), size: 11, in: ctx)
 
         // Section stack, centered on the spine (u = 0), fanned downward.
@@ -168,7 +209,7 @@ public enum PDFReportWriter {
         if let split = toplineSplit(rocker, pageWidth: pageWidth, ppm: ppm) {
             drawToplineSegment(in: ctx, rocker: rocker, split: split, ppm: ppm,
                                arcLo: split.minArc, arcHi: split.page1End, originArc: split.minArc,
-                               markWithers: true)
+                               withersArc: withersArcLength)
         }
 
         // 3D model snapshot in the whitespace beneath the CENTER of the section fan.
@@ -235,7 +276,7 @@ public enum PDFReportWriter {
     /// right edge is cut off.
     private static func drawToplinePage(in ctx: CGContext, page: CGSize, animalName: String,
                                         dateText: String, rocker: [SIMD2<Double>], imperial: Bool,
-                                        ppm: CGFloat, scale: CGFloat) {
+                                        ppm: CGFloat, scale: CGFloat, withersArcLength: Double?) {
         guard let split = toplineSplit(rocker, pageWidth: page.width, ppm: ppm) else { return }
         let pageHeight = page.height
         let contentLeft = sideMargin
@@ -257,7 +298,7 @@ public enum PDFReportWriter {
 
         drawToplineSegment(in: ctx, rocker: rocker, split: split, ppm: ppm,
                            arcLo: split.page1End, arcHi: split.page2End, originArc: split.page1End,
-                           markWithers: false)
+                           withersArc: withersArcLength)
 
         if split.page2End < split.maxArc - 1e-6 {
             drawText("(spine continues past this edge — cut off)",
@@ -291,10 +332,16 @@ public enum PDFReportWriter {
     }
 
     /// Draws one strip of the topline over `[arcLo, arcHi]` at `ppm`, with the
-    /// left end (`originArc`) at `sideMargin`; optionally marks the withers.
+    /// left end (`originArc`) at `sideMargin`. Marks the withers when
+    /// `withersArc` falls inside this strip.
+    ///
+    /// The marker is placed by ARC LENGTH, not at `rocker[0]`: the rocker is
+    /// sampled over the span covered by *reliable* cross-sections, so when the
+    /// withers station itself is dropped as unreliable its first sample is a
+    /// different station entirely — which used to mislabel it "Withers".
     private static func drawToplineSegment(in ctx: CGContext, rocker: [SIMD2<Double>], split: ToplineSplit,
                                            ppm: CGFloat, arcLo: Double, arcHi: Double, originArc: Double,
-                                           markWithers: Bool) {
+                                           withersArc: Double?) {
         func x(_ arc: Double) -> CGFloat { sideMargin + CGFloat(arc - originArc) * ppm }
         func y(_ z: Double) -> CGFloat { toplineBaseline + CGFloat(z - split.zmin) * ppm }
 
@@ -308,12 +355,27 @@ public enum PDFReportWriter {
         }
         stroke(path, in: ctx, width: 1.6, gray: 0.15)
 
-        if markWithers {
-            let w = rocker[0]
-            let wp = CGPoint(x: x(w.x), y: y(w.y))
+        if let withersArc, withersArc >= arcLo, withersArc <= arcHi,
+           let wz = height(of: rocker, atArc: withersArc) {
+            let wp = CGPoint(x: x(withersArc), y: y(wz))
             dot(at: wp, in: ctx)
             drawText("Withers", at: CGPoint(x: wp.x + 6, y: wp.y - 13), size: 10, in: ctx)
         }
+    }
+
+    /// Topline height at an arc length, linearly interpolated between samples.
+    /// Nil when the arc lies outside the sampled span.
+    static func height(of rocker: [SIMD2<Double>], atArc arc: Double) -> Double? {
+        guard rocker.count > 1 else { return rocker.first?.y }
+        for i in 1..<rocker.count {
+            let a = rocker[i - 1], b = rocker[i]
+            let lo = min(a.x, b.x), hi = max(a.x, b.x)
+            guard arc >= lo, arc <= hi else { continue }
+            guard b.x != a.x else { return a.y }
+            let t = (arc - a.x) / (b.x - a.x)
+            return a.y + t * (b.y - a.y)
+        }
+        return nil
     }
 
     /// Clips a monotonic-in-arc polyline to `[lo, hi]`, interpolating the ends.
@@ -397,8 +459,14 @@ public enum PDFReportWriter {
             ?? sections.first { $0.stationIndex == 0 }?.arcLength
             ?? sections.map(\.arcLength).min() ?? 0
 
-        let rowH: CGFloat = 14, pad: CGFloat = 8, titleH: CGFloat = 16, boxW: CGFloat = 172
-        let boxH = pad * 2 + titleH + rowH * CGFloat(sections.count)
+        // Wrap into as many columns as the page allows: a single column of one row
+        // per section used to grow past the bottom edge on a long back.
+        let layout = legendLayout(page: page)
+        let rows = min(sections.count, layout.rows)
+        let columns = min(max(Int((Double(sections.count) / Double(max(rows, 1))).rounded(.up)), 1),
+                          layout.columns)
+        let boxW = legendColW * CGFloat(columns)
+        let boxH = legendPad * 2 + legendTitleH + legendRowH * CGFloat(rows)
         let right = page.width - margin
         let topY = page.height - margin - 4
         let box = CGRect(x: right - boxW, y: topY - boxH, width: boxW, height: boxH)
@@ -410,21 +478,25 @@ public enum PDFReportWriter {
         ctx.addRect(box); ctx.drawPath(using: .fillStroke)
         ctx.restoreGState()
 
-        drawText("Sections (from withers)", at: CGPoint(x: box.minX + pad, y: box.maxY - titleH),
+        drawText("Sections (from withers)",
+                 at: CGPoint(x: box.minX + legendPad, y: box.maxY - legendTitleH),
                  size: 10, bold: true, in: ctx)
 
         for (i, section) in sections.enumerated() {
-            let y = box.maxY - titleH - pad - CGFloat(i) * rowH
+            let column = i / rows, row = i % rows
+            guard column < columns else { break }
+            let colX = box.minX + legendPad + CGFloat(column) * legendColW
+            let y = box.maxY - legendTitleH - legendPad - CGFloat(row) * legendRowH
             let swatch = CGMutablePath()
-            swatch.move(to: CGPoint(x: box.minX + pad, y: y + 4))
-            swatch.addLine(to: CGPoint(x: box.minX + pad + 22, y: y + 4))
+            swatch.move(to: CGPoint(x: colX, y: y + 4))
+            swatch.addLine(to: CGPoint(x: colX + 22, y: y + 4))
             strokeColored(swatch, in: ctx, width: 2.6, color: sectionColor(i))
 
             let dist = abs(section.arcLength - withersArc)
             let distStr = imperial ? String(format: "%.1f in", dist / 0.0254)
                                    : String(format: "%.1f cm", dist * 100)
             let label = section.stationIndex == 0 ? "#0  Withers" : "#\(section.stationIndex)   \(distStr)"
-            drawText(label, at: CGPoint(x: box.minX + pad + 30, y: y), size: 9, in: ctx)
+            drawText(label, at: CGPoint(x: colX + 30, y: y), size: 9, in: ctx)
         }
     }
 

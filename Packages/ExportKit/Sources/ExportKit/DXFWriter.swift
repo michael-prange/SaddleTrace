@@ -30,12 +30,16 @@ public enum DXFWriter {
             out += group(0, "POLYLINE")
             out += group(8, layer)
             out += group(66, "1")                              // vertices follow
+            // R12 requires a dummy point on the POLYLINE header; strict readers
+            // reject the entity without it.
+            out += group(10, "0.0"); out += group(20, "0.0"); out += group(30, "0.0")
             out += group(70, section.isClosed ? "1" : "0")     // closed flag
             for p in pts {
                 out += group(0, "VERTEX")
                 out += group(8, layer)
                 out += group(10, fmt(p.x * mToCm))
                 out += group(20, fmt(p.y * mToCm))
+                out += group(30, "0.0")                        // planar sections
             }
             out += group(0, "SEQEND")
             out += group(8, layer)

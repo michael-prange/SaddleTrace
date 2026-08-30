@@ -16,6 +16,11 @@ public struct CrossSection: Sendable {
     public let uAxis: SIMD3<Double>
     /// In-plane vertical axis.
     public let vAxis: SIMD3<Double>
+    /// The section curve in the normalized 3D frame. When
+    /// `Configuration.lateralHalfWidth` is set this is the **clipped** curve, not
+    /// the full plane–mesh intersection: it is rebuilt from `points2D` so the two
+    /// representations always describe the same curve and have the same count.
+    /// (The tracings overlaid on the 3D model must match the printed section fan.)
     public let points3D: [SIMD3<Double>]
     public let points2D: [SIMD2<Double>]
     public let isClosed: Bool
@@ -37,14 +42,17 @@ public enum PlaneMeshIntersector {
             let v = [SIMD3<Double>(fa), SIMD3<Double>(fb), SIMD3<Double>(fc)]
             let d = v.map { simd_dot($0 - P, n) }
 
-            // Collect intersection points on edges whose endpoints straddle the plane.
+            // Collect intersection points on edges whose endpoints straddle the
+            // plane. A vertex lying exactly on the plane counts as positive, so a
+            // triangle that merely touches the plane still yields two crossings
+            // rather than one (which would be dropped, punching a hole in the
+            // section polyline).
             var crossings: [SIMD3<Double>] = []
             for (a, b) in [(0, 1), (1, 2), (2, 0)] {
                 let da = d[a], db = d[b]
-                if (da < 0 && db > 0) || (da > 0 && db < 0) {
-                    let s = da / (da - db)
-                    crossings.append(v[a] + s * (v[b] - v[a]))
-                }
+                guard (da >= 0) != (db >= 0) else { continue }
+                let s = da / (da - db)      // non-zero denominator: signs differ
+                crossings.append(v[a] + s * (v[b] - v[a]))
             }
             if crossings.count == 2 {
                 segments.append((crossings[0], crossings[1]))
@@ -121,16 +129,24 @@ public enum CrossSectionExtractor {
             }
 
             var points2D = fullPoints2D
+            var points3D = poly
             var isClosed = closed
             if let halfWidth = cfg.lateralHalfWidth {
-                points2D = clipLaterally(fullPoints2D, halfWidth: halfWidth)
-                guard points2D.count >= 2 else { continue }
-                isClosed = closed && points2D.count == fullPoints2D.count
+                let clipped = clipLaterally(fullPoints2D, halfWidth: halfWidth)
+                guard clipped.count >= 2 else { continue }
+                isClosed = closed && clipped.count == fullPoints2D.count
+                points2D = clipped
+                // Rebuild the 3D curve from the clipped 2D one. The section lies in
+                // the plane spanned by (uAxis, vAxis) through `origin`, so this
+                // round-trips the surviving points exactly and places the
+                // interpolated boundary points correctly — and guarantees the two
+                // representations stay the same curve and the same length.
+                points3D = clipped.map { origin + $0.x * uAxis + $0.y * vAxis }
             }
 
             sections.append(CrossSection(
                 stationIndex: i, arcLength: s, origin: origin, normal: normal,
-                uAxis: uAxis, vAxis: vAxis, points3D: poly, points2D: points2D, isClosed: isClosed
+                uAxis: uAxis, vAxis: vAxis, points3D: points3D, points2D: points2D, isClosed: isClosed
             ))
         }
         return sections
