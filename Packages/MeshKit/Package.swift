@@ -3,7 +3,7 @@ import PackageDescription
 
 let package = Package(
     name: "MeshKit",
-    platforms: [.iOS(.v26), .macOS(.v26)],
+    platforms: [.iOS(.v17), .macOS(.v26)],
     products: [
         .library(name: "MeshKit", targets: ["MeshKit"]),
     ],
