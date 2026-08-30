@@ -75,21 +75,26 @@ struct ScanDetailView: View {
         isLoading = false
     }
 
-    private var hasFrames: Bool {
-        appModel.hasCapturedFrames(animalID: animal.id, scanID: scan.id)
+    /// Whether *this* scan has something on disk to reconstruct from — a LiDAR
+    /// mesh or captured frames. Shares `AppModel`'s test with the auto-reconstruct
+    /// queue so the button and the queue can't disagree.
+    private var canReconstructThis: Bool {
+        appModel.reconstructionInput(animalID: animal.id, scanID: scan.id) != nil
     }
 
     @ViewBuilder
     private var processingSection: some View {
-        if let progress = appModel.reconstructionProgress {
+        // Only this scan's own progress — the queue is shared, so a different
+        // scan reconstructing used to show up here as if it were this one.
+        if let progress = appModel.reconstruction, progress.scanID == scan.id {
             Section {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("Reconstructing…").font(.headline)
-                    ProgressView(value: progress)
+                    ProgressView(value: progress.fraction)
                     Text("This can take a few minutes.").font(.caption).foregroundStyle(.secondary)
                 }
             }
-        } else if hasFrames && appModel.canReconstruct {
+        } else if canReconstructThis {
             Section {
                 Button { reconstruct() } label: {
                     if isProcessing { HStack { ProgressView(); Text("Working…") } }

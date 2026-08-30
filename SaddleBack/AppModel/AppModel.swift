@@ -11,12 +11,29 @@ import ExportKit
 @Observable
 final class AppModel {
     private(set) var animals: [AnimalRecord] = []
+    /// Set by any failing operation; surfaced by the single root alert in
+    /// `AnimalListView`. Write to it from a new error path and it shows up on
+    /// its own — do not add a local alert.
     var errorMessage: String?
-    /// Reconstruction progress (0–1) while a scan is being reconstructed.
-    var reconstructionProgress: Double?
+    /// Informational (non-error) result of the last import, shown by the same alert.
+    var infoMessage: String?
+    /// Which scan is currently reconstructing, and how far along. Carries the scan
+    /// id so a detail view can tell "my scan is reconstructing" from "some other
+    /// scan in the queue is".
+    var reconstruction: ReconstructionProgress?
 
-    /// Whether this device can reconstruct scans (PhotogrammetrySession).
-    var canReconstruct: Bool { ReconstructionDriver.isSupported }
+    struct ReconstructionProgress: Equatable, Sendable {
+        let scanID: UUID
+        var fraction: Double
+    }
+
+    /// What a scan can be reconstructed from.
+    enum ReconstructionInput: Sendable {
+        /// A single-shot / fused LiDAR mesh: reconstructed directly, no photogrammetry.
+        case lidarMesh(URL)
+        /// Captured HEIC frames: needs `PhotogrammetrySession`.
+        case frames(URL)
+    }
 
     /// USD (Y-up) → MeshKit (Z-up): rotate +90° about X, (x,y,z) → (x,−z,y).
     private static let yUpToZUp = simd_float4x4(
@@ -140,6 +157,9 @@ final class AppModel {
         do {
             let count = try await library.importArchive(from: url)
             await loadAnimals()
+            infoMessage = count > 0
+                ? "Imported \(count) scan\(count == 1 ? "" : "s")."
+                : "That file contained no scans to import."
             return count
         } catch {
             errorMessage = "Couldn't import archive: \(error.localizedDescription)"
@@ -147,14 +167,18 @@ final class AppModel {
         }
     }
 
-    /// Generates the single-page cross-section PDF for a processed scan and
-    /// returns its URL. Uses the current unit + page-size settings.
-    private func generateReportPDF(_ result: ProcessedScan, animalID: UUID, scanID: UUID) -> URL? {
+    /// Generates the cross-section PDF report for a processed scan and returns
+    /// its URL. Uses the current unit + page-size settings.
+    /// - Parameter capturedAt: the scan's own capture time. The report is
+    ///   regenerated every time a completed scan is opened, so stamping it with
+    ///   the *generation* time re-dated old scans to today on every viewing.
+    private func generateReportPDF(_ result: ProcessedScan, animalID: UUID, scanID: UUID,
+                                   capturedAt: Date) -> URL? {
         let defaults = UserDefaults.standard
         let imperial = defaults.string(forKey: "measurementSystem") == MeasurementSystem.imperial.rawValue
         let pageSize = PDFPageSize(rawValue: defaults.string(forKey: "pdfPageSize") ?? "") ?? .letter
         let name = animals.first { $0.id == animalID }?.name ?? "Animal"
-        let date = Date.now.formatted(date: .abbreviated, time: .shortened)
+        let date = capturedAt.formatted(date: .abbreviated, time: .shortened)
         let url = library.exportsDirectory(animalID, scanID).appendingPathComponent("report.pdf")
         // Offscreen snapshot of the painted 3D model (with tracings) to embed.
         var modelImage: CGImage?
@@ -176,12 +200,20 @@ final class AppModel {
         }
     }
 
-    /// Whether a scan has captured frames available to reconstruct.
-    nonisolated func hasCapturedFrames(animalID: UUID, scanID: UUID) -> Bool {
-        let dir = library.framesDirectory(animalID, scanID)
-        let heics = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil))?
+    /// What this scan can be reconstructed from, or nil if nothing usable is on
+    /// disk. Single source of truth: the auto-reconstruct queue, `reconstructScan`,
+    /// and `ScanDetailView` all route off this, so the "is there anything to
+    /// reconstruct?" test can't drift between them. (It used to: the view only
+    /// looked for HEICs, so a single-shot scan with a perfectly good `lidar.obj`
+    /// but no photo showed "No captured data" and offered no way to retry.)
+    func reconstructionInput(animalID: UUID, scanID: UUID) -> ReconstructionInput? {
+        let framesDir = library.framesDirectory(animalID, scanID)
+        let lidarOBJ = framesDir.appendingPathComponent("lidar.obj")
+        if FileManager.default.fileExists(atPath: lidarOBJ.path) { return .lidarMesh(lidarOBJ) }
+        guard ReconstructionDriver.isSupported else { return nil }
+        let heics = (try? FileManager.default.contentsOfDirectory(at: framesDir, includingPropertiesForKeys: nil))?
             .filter { $0.pathExtension.lowercased() == "heic" } ?? []
-        return !heics.isEmpty
+        return heics.isEmpty ? nil : .frames(framesDir)
     }
 
     /// Tail of the serialized reconstruction queue, so back-to-back captures
@@ -193,11 +225,7 @@ final class AppModel {
     /// photogrammetry and frames were actually saved. Chains behind any in-flight
     /// reconstruction and returns once THIS scan has finished (or was skipped).
     func autoReconstruct(_ scan: ScanRecord, for animalID: UUID) async {
-        let lidarOBJ = library.framesDirectory(animalID, scan.id).appendingPathComponent("lidar.obj")
-        let hasLidarMesh = FileManager.default.fileExists(atPath: lidarOBJ.path)
-        guard hasLidarMesh
-                || (ReconstructionDriver.isSupported && hasCapturedFrames(animalID: animalID, scanID: scan.id))
-        else { return }
+        guard reconstructionInput(animalID: animalID, scanID: scan.id) != nil else { return }
         let previous = reconstructionTask
         let task = Task { @MainActor in
             await previous?.value
@@ -209,23 +237,25 @@ final class AppModel {
 
     /// Reconstructs a real mesh from a scan's captured frames (PhotogrammetrySession),
     /// then runs the MeshKit pipeline on it. Reports progress via
-    /// `reconstructionProgress`.
+    /// `reconstruction`.
     func reconstructScan(_ scan: ScanRecord, for animalID: UUID) async -> ProcessedScan? {
         let framesDir = library.framesDirectory(animalID, scan.id)
-        let lidarOBJ = framesDir.appendingPathComponent("lidar.obj")
-        await library.materialize(lidarOBJ)
-        let hasLidarMesh = FileManager.default.fileExists(atPath: lidarOBJ.path)
+        // Materialize first: on an iCloud store the mesh may be evicted, and the
+        // routing below turns on whether it is present locally.
+        await library.materialize(framesDir.appendingPathComponent("lidar.obj"))
 
-        // The LiDAR path uses ARKit's fused scene mesh directly (no photogrammetry);
+        // The LiDAR path uses ARKit's depth/scene mesh directly (no photogrammetry);
         // only the TrueDepth path needs a PhotogrammetrySession.
-        guard hasLidarMesh || ReconstructionDriver.isSupported else {
-            errorMessage = "This device can't reconstruct scans."
+        guard let input = reconstructionInput(animalID: animalID, scanID: scan.id) else {
+            errorMessage = ReconstructionDriver.isSupported
+                ? "This scan has no captured data to reconstruct."
+                : "This device can't reconstruct scans."
             return nil
         }
 
         let start = Date()
-        reconstructionProgress = 0
-        defer { reconstructionProgress = nil }
+        reconstruction = ReconstructionProgress(scanID: scan.id, fraction: 0)
+        defer { reconstruction = nil }
 
         var updated = scan; updated.status = .reconstructing
         try? await library.save(updated, for: animalID)
@@ -234,26 +264,27 @@ final class AppModel {
             let mesh: TriangleMesh
             let textured: URL?
             let fused: URL?
-            if hasLidarMesh {
-                // Fused LiDAR scene mesh (ARKit Y-up) → Z-up; already cropped to the
-                // scanned region, so no floor to strip.
+            switch input {
+            case .lidarMesh(let lidarOBJ):
+                // LiDAR mesh (ARKit Y-up) → Z-up; already cropped to the scanned
+                // region, so no floor to strip.
                 mesh = try MeshIO.readOBJ(at: lidarOBJ).transformed(by: Self.yUpToZUp)
                 textured = nil
                 fused = lidarOBJ
-                reconstructionProgress = 0.6
-            } else {
+                reconstruction?.fraction = 0.6
+            case .frames(let dir):
                 let usdz = library.artifactURL(animalID, scan.id, .modelUSDZ)
                 _ = try await ReconstructionDriver.reconstruct(
-                    framesDirectory: framesDir, outputURL: usdz, detail: scan.detail
+                    framesDirectory: dir, outputURL: usdz, detail: scan.detail
                 ) { fraction in
-                    Task { @MainActor in self.reconstructionProgress = fraction * 0.9 }
+                    Task { @MainActor in self.reconstruction?.fraction = fraction * 0.9 }
                 }
                 mesh = try USDZMeshLoader.loadTriangleMesh(from: usdz).transformed(by: Self.yUpToZUp)
                 textured = usdz
                 fused = nil
             }
 
-            reconstructionProgress = 0.95
+            reconstruction?.fraction = 0.95
             let result = try await makeResult(mesh: mesh, textured: textured, fused: fused, scan: scan, animalID: animalID)
             updated = scan; updated.status = .complete
             updated.processingSeconds = Date().timeIntervalSince(start)
@@ -333,7 +364,8 @@ final class AppModel {
                 result.exports.tracingsURL = tracings
             }
         }
-        result.exports.reportPDF = generateReportPDF(result, animalID: animalID, scanID: scan.id)
+        result.exports.reportPDF = generateReportPDF(result, animalID: animalID, scanID: scan.id,
+                                                     capturedAt: scan.timestamp)
         return result
     }
 

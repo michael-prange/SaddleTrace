@@ -176,10 +176,12 @@ struct ResultView: View {
     // MARK: Derived data
 
     private struct ProfilePoint: Identifiable {
-        let id = UUID()
         let arc: Double
         let value: Double
         var series: String = ""
+        /// Derived, not a fresh UUID: these are recomputed on every render, so a
+        /// new identity each time defeated Charts' diffing.
+        var id: String { "\(series)-\(arc)" }
     }
 
     private var rockerPoints: [ProfilePoint] {

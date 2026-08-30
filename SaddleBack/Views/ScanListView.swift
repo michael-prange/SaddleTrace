@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// An animal's scan history. "New Scan" currently creates a placeholder record;
-/// the LiDAR capture pipeline arrives with CaptureKit.
+/// An animal's scan history. "New Scan" runs the capture flow for the resolved
+/// mode (rear single-shot LiDAR, else front TrueDepth), then auto-reconstructs.
 struct ScanListView: View {
     let animal: AnimalRecord
     @Environment(AppModel.self) private var appModel
@@ -72,7 +72,7 @@ struct ScanListView: View {
             }
         }
         .task { await reload() }
-        .onChange(of: appModel.reconstructionProgress == nil) {
+        .onChange(of: appModel.reconstruction == nil) {
             // Refresh when a reconstruction starts or finishes so the row's status
             // (Reconstructing… → Complete/Failed) stays current.
             Task { await reload() }

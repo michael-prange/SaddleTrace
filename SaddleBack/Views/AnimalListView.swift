@@ -9,7 +9,6 @@ struct AnimalListView: View {
     @State private var showingImporter = false
     @State private var shareItem: ShareItem?
     @State private var isBuilding = false
-    @State private var importMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -83,10 +82,23 @@ struct AnimalListView: View {
                     )
                 }
             }
-            .alert("Import", isPresented: Binding(get: { importMessage != nil }, set: { if !$0 { importMessage = nil } })) {
-                Button("OK", role: .cancel) { importMessage = nil }
+            // The app's single error surface. Every failing operation writes to
+            // `AppModel.errorMessage`; before this, all 15 of those paths were
+            // silent and a failed import or reconstruction looked like nothing
+            // happening at all.
+            .alert("Something went wrong", isPresented: Binding(
+                get: { appModel.errorMessage != nil },
+                set: { if !$0 { appModel.errorMessage = nil } })) {
+                Button("OK", role: .cancel) { appModel.errorMessage = nil }
             } message: {
-                Text(importMessage ?? "")
+                Text(appModel.errorMessage ?? "")
+            }
+            .alert("Import", isPresented: Binding(
+                get: { appModel.infoMessage != nil },
+                set: { if !$0 { appModel.infoMessage = nil } })) {
+                Button("OK", role: .cancel) { appModel.infoMessage = nil }
+            } message: {
+                Text(appModel.infoMessage ?? "")
             }
         }
     }
@@ -110,9 +122,10 @@ struct AnimalListView: View {
         Task {
             let ok = url.startAccessingSecurityScopedResource()
             defer { if ok { url.stopAccessingSecurityScopedResource() } }
-            let count = await appModel.importArchive(from: url)
+            // Reports its own outcome through the alerts above, so an import
+            // opened from Files reads the same as one started from this menu.
+            await appModel.importArchive(from: url)
             isBuilding = false
-            importMessage = count > 0 ? "Imported \(count) scan\(count == 1 ? "" : "s")." : "No scans were imported."
         }
     }
 }

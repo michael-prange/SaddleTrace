@@ -10,8 +10,7 @@ extension ReconstructionDetail {
 
 /// Runs on-device photogrammetry (`PhotogrammetrySession`) over a folder of
 /// captured frames to produce a USDZ mesh (Design §8). Metric scale comes from
-/// depth embedded in the HEICs (TrueDepth path). Main-actor, since
-/// `PhotogrammetrySession` is main-actor-isolated.
+/// depth embedded in the HEICs (TrueDepth path).
 enum ReconstructionDriver {
 
     enum ReconstructionError: Error, Equatable {

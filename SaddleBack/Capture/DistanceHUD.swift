@@ -1,5 +1,14 @@
 import SwiftUI
 
+/// Where the phone is relative to the ideal scanning distance band. Shared by
+/// both capture screens (single-shot LiDAR and front TrueDepth) and this HUD.
+nonisolated enum CaptureDistanceState: String, Sendable {
+    case noSurface
+    case tooClose
+    case justRight
+    case tooFar
+}
+
 /// Vertical gauge showing whether the phone is too close / just right / too far,
 /// with a moving indicator and the live distance in the user's units.
 struct DistanceHUD: View {
