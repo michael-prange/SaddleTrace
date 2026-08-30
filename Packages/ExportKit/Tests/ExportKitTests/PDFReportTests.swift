@@ -53,13 +53,13 @@ struct PDFReportTests {
         // PDF magic bytes.
         #expect(data.prefix(4) == Data("%PDF".utf8))
 
-        try data.write(to: URL(fileURLWithPath: "/tmp/saddleback_report.pdf"))
+        try data.write(to: URL(fileURLWithPath: "/tmp/saddletrace_report.pdf"))
 
         // Letter: sections must drop below 1:1 so the widest section fits.
         let letter = PDFReportWriter.pdfData(
             animalName: "Penelope (mule)", dateText: "2026-08-03",
             sections: sections, rocker: rocker, imperial: true, pageSize: .letter)
-        try letter.write(to: URL(fileURLWithPath: "/tmp/saddleback_letter.pdf"))
+        try letter.write(to: URL(fileURLWithPath: "/tmp/saddletrace_letter.pdf"))
     }
 }
 

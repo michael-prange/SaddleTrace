@@ -1,13 +1,13 @@
 //
-//  SaddleBackUITestsLaunchTests.swift
-//  SaddleBackUITests
+//  SaddleTraceUITestsLaunchTests.swift
+//  SaddleTraceUITests
 //
 //  Created by Michael Prange on 7/30/26.
 //
 
 import XCTest
 
-final class SaddleBackUITestsLaunchTests: XCTestCase {
+final class SaddleTraceUITestsLaunchTests: XCTestCase {
 
     override class var runsForEachTargetApplicationUIConfiguration: Bool {
         true

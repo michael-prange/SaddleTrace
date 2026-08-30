@@ -1,6 +1,6 @@
 //
-//  SaddleBackApp.swift
-//  SaddleBack
+//  SaddleTraceApp.swift
+//  SaddleTrace
 //
 //  Created by Michael Prange on 7/30/26.
 //
@@ -8,7 +8,7 @@
 import SwiftUI
 
 @main
-struct SaddleBackApp: App {
+struct SaddleTraceApp: App {
     @State private var appModel: AppModel?
     /// An archive opened via "Open With…" before the model finished loading.
     @State private var pendingImport: URL?
@@ -33,7 +33,7 @@ struct SaddleBackApp: App {
                 }
             }
             .onOpenURL { url in
-                // A `.saddleback` archive opened from Files / share sheet / AirDrop.
+                // A `.saddletrace` archive opened from Files / share sheet / AirDrop.
                 if let appModel {
                     Task { await importArchive(url, into: appModel) }
                 } else {

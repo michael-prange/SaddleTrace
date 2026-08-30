@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import SaddleBack
+@testable import SaddleTrace
 
 /// App-level scan-record plumbing. The geometry pipeline itself is validated in
 /// MeshKit's own tests; the synthetic "demo" processing path has been removed now
@@ -11,7 +11,7 @@ struct ScanProcessorTests {
 
     private func makeModel() -> (AppModel, URL) {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("saddleback_proc_\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("saddletrace_proc_\(UUID().uuidString)", isDirectory: true)
         return (AppModel(library: ScanLibrary(root: root)), root)
     }
 

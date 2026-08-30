@@ -19,8 +19,8 @@ nonisolated final class TrueDepthCaptureController: NSObject, AVCaptureDataOutpu
     private let model: TrueDepthCaptureModel
 
     private let session = AVCaptureSession()
-    private let sessionQueue = DispatchQueue(label: "saddleback.truedepth.session")
-    private let dataQueue = DispatchQueue(label: "saddleback.truedepth.data")
+    private let sessionQueue = DispatchQueue(label: "saddletrace.truedepth.session")
+    private let dataQueue = DispatchQueue(label: "saddletrace.truedepth.data")
     private let motionQueue = OperationQueue()
     private let videoOutput = AVCaptureVideoDataOutput()
     private let depthOutput = AVCaptureDepthDataOutput()

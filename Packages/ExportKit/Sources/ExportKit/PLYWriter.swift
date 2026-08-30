@@ -21,7 +21,7 @@ public enum PLYWriter {
             f += 3
         }
 
-        var out = "ply\nformat ascii 1.0\ncomment SaddleBack painted surface\n"
+        var out = "ply\nformat ascii 1.0\ncomment SaddleTrace painted surface\n"
         out += "element vertex \(n)\n"
         out += "property float x\nproperty float y\nproperty float z\n"
         out += "property uchar red\nproperty uchar green\nproperty uchar blue\n"

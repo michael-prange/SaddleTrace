@@ -1,6 +1,6 @@
 import Testing
 import Foundation
-@testable import SaddleBack
+@testable import SaddleTrace
 
 @Suite("ScanLibrary persistence")
 struct ScanLibraryTests {
@@ -8,7 +8,7 @@ struct ScanLibraryTests {
     /// A library rooted in a unique temp directory, plus a cleanup handle.
     private func makeLibrary() -> (ScanLibrary, URL) {
         let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("saddleback_tests_\(UUID().uuidString)", isDirectory: true)
+            .appendingPathComponent("saddletrace_tests_\(UUID().uuidString)", isDirectory: true)
         return (ScanLibrary(root: root), root)
     }
 

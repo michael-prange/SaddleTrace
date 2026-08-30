@@ -15,7 +15,7 @@ struct USDZTests {
     func writesUSDZ() throws {
         let mesh = SyntheticBackMesh.straightCylinder(segmentsAlong: 20, segmentsAround: 24)
         let url = FileManager.default.temporaryDirectory
-            .appendingPathComponent("saddleback_test_\(UUID().uuidString).usdz")
+            .appendingPathComponent("saddletrace_test_\(UUID().uuidString).usdz")
         defer { try? FileManager.default.removeItem(at: url) }
 
         try USDZWriter.write(mesh, to: url)

@@ -1,7 +1,7 @@
-# SaddleBack — Working Agreement & Project Notes
+# SaddleTrace — Working Agreement & Project Notes
 
 App implements `Design.MD` (working title in doc: *EquineBackScanner*). iOS 26.x,
-LiDAR + photogrammetry equine back scanner. Product name: **SaddleBack**.
+LiDAR + photogrammetry equine back scanner. Product name: **SaddleTrace**.
 
 ## How we work together
 - **Senior-dev partnership.** Guide architecture; challenge weak approaches, propose better ones.
@@ -102,9 +102,9 @@ XY; spine = max-Z per slice.
   SYNTHETIC, so scan result still isn't Penelope (frames ARE saved now). (2) Coverage
   colors the WHOLE visible mesh incl floor/walls — no live ROI restriction (§7.5) yet.
   (3) material alpha may need daylight tuning.
-- Device deploy recipe: `xcodebuild -scheme SaddleBack -destination 'platform=iOS,id=<DID>'
+- Device deploy recipe: `xcodebuild -scheme SaddleTrace -destination 'platform=iOS,id=<DID>'
   -allowProvisioningUpdates -derivedDataPath /tmp/x build` then `xcrun devicectl device
-  install app --device <DID> <app>` + `... process launch ... com.prange.SaddleBack`.
+  install app --device <DID> <app>` + `... process launch ... com.prange.SaddleTrace`.
   DID=00008120-001445381433401E. (MCP test runner grabs the device & fails to launch
   host — use xcodebuild w/ sim id F1107CB6-4779-41CE-B9DB-D718397971B3 for tests.)
 
@@ -137,11 +137,11 @@ XY; spine = max-Z per slice.
   available (`StorageRoot.resolve()` off-main, one-time `setUbiquitous` migration
   of existing local scans), else local Documents. iOS auto-uploads + evicts under
   storage pressure + re-downloads on access (native offload).
-- `AppModel.make()` async resolves root off-main; `SaddleBackApp` shows a loading
+- `AppModel.make()` async resolves root off-main; `SaddleTraceApp` shows a loading
   view then builds the model. `AppModel.isUsingICloud` shown in Settings ▸ Storage.
   `ScanLibrary.ensureDownloaded()` re-materializes evicted files on read.
 - ⚠️ DORMANT until Michael enables **iCloud → iCloud Documents** capability
-  (Signing & Capabilities, container `iCloud.com.prange.SaddleBack`, automatic
+  (Signing & Capabilities, container `iCloud.com.prange.SaddleTrace`, automatic
   signing) — until then `url(forUbiquityContainerIdentifier:)` is nil → local.
   Can't add entitlement myself (pbxproj/entitlements).
 - Connectivity: Michael has 2 bars in camp, none on trail → scans stay local on
@@ -290,7 +290,7 @@ XY; spine = max-Z per slice.
   future add if wanted.
 - DEVICE-ONLY checks: photo not mirrored/upside-down on the surface (the RGB Y-flip +
   depth CV→ARKit flip must agree); colors look right (CIContext YCbCr→RGB).
-- TEST FILE TO DELETE (Michael, in Xcode): `SaddleBackUITests/ResultViewUITest.swift`
+- TEST FILE TO DELETE (Michael, in Xcode): `SaddleTraceUITests/ResultViewUITest.swift`
   (obsolete demo-driven flow). `ScanProcessorTests.swift` repurposed → KEEP.
 
 ## Spine-by-symmetry + demo removal + 3D rotation fix (2026-08-04), NOT device-verified
@@ -482,7 +482,7 @@ XY; spine = max-Z per slice.
 - SHARE / REIMPORT (Apple Archive, chosen over .zip — native, no dep): `ScanArchive`
   (Model/) LZFSE-archives/extracts a dir tree (AppleArchive+System). `ScanLibrary.
   exportScan/exportAll` stage a mirror of the store layout (+manifest.json) →
-  `.saddleback` file in tmp; `importArchive` extracts + MERGES (new animal copied
+  `.saddletrace` file in tmp; `importArchive` extracts + MERGES (new animal copied
   whole; existing animal keeps its info.json, scans merged; scan-id COLLISION →
   fresh UUID via `reidScan` rewriting metadata.json so nothing clobbers). `AppModel.
   exportScanArchive/exportAllArchive/importArchive`. UI: AnimalList ▸ ⋯ menu =
@@ -540,7 +540,7 @@ XY; spine = max-Z per slice.
   NOTE: keep app *test* target free of MeshKit types (not linked to it) — tests
   touch only app-module types + Foundation/simd.
 - 2026-07-31: ResultView VISUALLY VERIFIED on iPhone 14 Pro (iOS 26.5) via
-  `SaddleBackUITests/ResultViewUITest` (drives add-animal→scan→process, asserts
+  `SaddleTraceUITests/ResultViewUITest` (drives add-animal→scan→process, asserts
   render, captures screenshots). Charts + cross-section Canvas + ShareLink render.
   - iPhone 14 Pro sim only exists on old runtime; created one on iOS-26-5 to run
     (app min deploy 26.5). To run UI test on a specific sim, use xcodebuild

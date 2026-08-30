@@ -167,7 +167,7 @@ actor ScanLibrary {
     private struct ArchiveManifest: Codable, Sendable { var version: Int; var kind: String; var created: Date }
 
     /// Archives a single scan (plus its animal's `info.json`) into a shareable
-    /// `.saddleback` file in a temp directory; returns its URL for the caller to
+    /// `.saddletrace` file in a temp directory; returns its URL for the caller to
     /// share. The recipient reimports it with `importArchive(from:)`.
     func exportScan(animalID: UUID, scanID: UUID) async throws -> URL {
         let staging = try makeStaging()
@@ -189,7 +189,7 @@ actor ScanLibrary {
         return try makeArchive(from: staging, named: await archiveName(animalID: animalID))
     }
 
-    /// Archives the whole animal store into a shareable `.saddleback` file; returns
+    /// Archives the whole animal store into a shareable `.saddletrace` file; returns
     /// its URL. The recipient reimports it with `importArchive(from:)`.
     func exportAll() async throws -> URL {
         let staging = try makeStaging()
@@ -200,7 +200,7 @@ actor ScanLibrary {
         try FileManager.default.copyItem(at: root, to: staging.appendingPathComponent("animals", isDirectory: true))
 
         try writeManifest(kind: "library", to: staging)
-        return try makeArchive(from: staging, named: "SaddleBack-AllScans-\(dateStamp())")
+        return try makeArchive(from: staging, named: "SaddleTrace-AllScans-\(dateStamp())")
     }
 
     /// Imports an archive produced by `exportScan`/`exportAll`, merging its animals
@@ -263,7 +263,7 @@ actor ScanLibrary {
     }
 
     private func makeArchive(from staging: URL, named name: String) throws -> URL {
-        let out = FileManager.default.temporaryDirectory.appendingPathComponent("\(name).saddleback")
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("\(name).saddletrace")
         try? FileManager.default.removeItem(at: out)
         try ScanArchive.archive(contentsOf: staging, to: out)
         return out
